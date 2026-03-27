@@ -46,7 +46,7 @@
 
   .status-bar {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
     padding: 10px 14px;
     background: var(--surface);
@@ -54,13 +54,6 @@
     margin: 10px 0;
     font-size: 14px;
   }
-  .status-bar .printer-status { display: flex; align-items: center; gap: 6px; }
-  .status-bar .dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    background: var(--gray);
-    display: inline-block;
-  }
-  .status-bar .dot.connected { background: var(--green); }
   .status-bar .case-count { color: var(--text-muted); }
 
   .main-area {
@@ -186,16 +179,79 @@
   }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-secondary { background: var(--surface); color: var(--text); border: 1px solid #ffffff20; }
-  .btn-connect {
-    padding: 8px 16px;
-    font-size: 13px;
+
+  /* Report hint card */
+  .report-hint {
+    width: 100%;
     background: var(--surface);
+    border: 1px solid #ffffff15;
+    border-radius: 10px;
+    padding: 14px;
+    text-align: left;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .report-hint .hint-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .report-hint .hint-section {
+    margin-bottom: 6px;
+  }
+  .report-hint .hint-label {
+    font-weight: bold;
     color: var(--text);
+  }
+  .report-hint .hint-detail {
+    color: var(--text-muted);
+  }
+  .hint-toggle {
+    background: none;
     border: 1px solid #ffffff20;
     border-radius: 8px;
+    color: var(--accent);
+    font-size: 13px;
+    padding: 6px 14px;
     cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
   }
-  .btn-success { background: var(--green); color: #fff; }
+
+  /* MARCH / MIST result sections */
+  .result-section {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid #ffffff15;
+  }
+  .result-section-title {
+    font-size: 13px;
+    font-weight: bold;
+    color: var(--accent);
+    margin-bottom: 6px;
+  }
+  .result-field {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-muted);
+  }
+  .result-field .field-label {
+    color: var(--text);
+    font-weight: bold;
+  }
+  .result-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .result-tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: #ffffff15;
+    color: var(--text);
+  }
 
   /* Error */
   .error-msg {
@@ -223,11 +279,6 @@
   </header>
 
   <div class="status-bar">
-    <div class="printer-status">
-      <span class="dot" id="printerDot"></span>
-      <span id="printerLabel">印表機未連線</span>
-      <button class="btn-connect" id="btnConnect" onclick="connectPrinter()">連線</button>
-    </div>
     <div class="case-count">已處理：<span id="caseCount">0</span> 人</div>
   </div>
 
@@ -238,7 +289,33 @@
         <span class="mic">&#x1F399;</span>
         <span>按住錄音</span>
       </button>
-      <div class="recording-info" style="visibility:hidden" id="idleHint">按住按鈕開始口述傷況</div>
+      <button class="hint-toggle" id="btnHintToggle" onclick="toggleHint()">口述提示 MIST</button>
+      <div class="report-hint" id="reportHint" style="display:none;">
+        <div class="hint-title">MIST 口述回報格式</div>
+        <div class="hint-section">
+          <span class="hint-label">M 受傷機轉：</span>
+          <span class="hint-detail">爆炸/槍傷/穿刺/車禍/墜落/咬傷/溺水...</span>
+        </div>
+        <div class="hint-section">
+          <span class="hint-label">I 發現傷勢：</span>
+          <span class="hint-detail">部位、傷型、出血、骨折、燒燙傷...</span>
+        </div>
+        <div class="hint-section">
+          <span class="hint-label">S 生命徵象：</span>
+          <span class="hint-detail">意識(AVPU)、呼吸次數、脈搏、血氧、體溫</span>
+        </div>
+        <div class="hint-section">
+          <span class="hint-label">T 已做處置：</span>
+          <span class="hint-detail">止血帶、填塞、加壓、胸封、保暖毯...</span>
+        </div>
+        <div style="margin-top:8px; border-top:1px solid #ffffff15; padding-top:8px;">
+          <div class="hint-title">MARCH 評估順序</div>
+          <span class="hint-detail">M大出血 → A呼吸道 → R呼吸 → C循環 → H低體溫</span>
+        </div>
+        <div style="margin-top:6px;">
+          <span class="hint-detail" style="font-size:12px;">特殊族群請提及：兒童/孕婦/慢性病/高齡/外國人</span>
+        </div>
+      </div>
     </div>
 
     <!-- Recording Screen -->
@@ -266,6 +343,10 @@
         <div class="result-meta" id="resultMeta"></div>
         <div class="result-summary" id="resultSummary"></div>
         <ul class="result-actions" id="resultActions"></ul>
+        <div class="result-section" id="sectionMIST"></div>
+        <div class="result-section" id="sectionMARCH"></div>
+        <div class="result-section" id="sectionVitals"></div>
+        <div class="result-section" id="sectionTags"></div>
         <div class="result-transcript" id="resultTranscript"></div>
       </div>
       <div class="btn-row" id="resultButtons"></div>
@@ -274,7 +355,7 @@
     <!-- Done Screen -->
     <div class="screen" id="screenDone">
       <div style="font-size:48px;">&#x2705;</div>
-      <div style="font-size:18px;">列印完成</div>
+      <div style="font-size:18px;">已完成</div>
       <button class="btn btn-primary" onclick="resetToIdle()" style="margin-top:12px;">下一位傷患</button>
     </div>
 
@@ -285,23 +366,16 @@
     </div>
   </div>
 
-  <footer>STAT v0.1 POC — 僅供演練展示</footer>
+  <footer>STAT v0.2 POC — 僅供演練展示</footer>
 </div>
 
 <script>
 // ── Config ──
-const API_BASE = window.location.origin;
+// Derive API base from current page path (includes /s/{secret}/)
+const pagePath = window.location.pathname.replace(/\/+$/, '');
+const API_BASE = window.location.origin + pagePath;
 const MAX_RECORD_SEC = 20;
 const MIN_RECORD_SEC = 2;
-
-// ── BLE Printer (H22) ──
-// Common 58mm BLE printer UUIDs — update after real-device testing
-const PRINTER_SERVICE_UUID = '000018f0-0000-1000-8000-00805f9b34fb';
-const PRINTER_CHAR_UUID = '00002af1-0000-1000-8000-00805f9b34fb';
-
-let bleDevice = null;
-let bleCharacteristic = null;
-let printerConnected = false;
 
 // ── State ──
 let mediaRecorder = null;
@@ -313,11 +387,11 @@ let currentResult = null;
 
 // ── Triage display mapping ──
 const LEVEL_MAP = {
-  red:     { emoji: '🔴', label: '立即處置 - IMMEDIATE', color: 'red' },
-  yellow:  { emoji: '🟡', label: '延遲處置 - DELAYED',   color: 'yellow' },
-  green:   { emoji: '🟢', label: '輕傷 - MINOR',        color: 'green' },
-  black:   { emoji: '⚫', label: '期待 - EXPECTANT',     color: 'black' },
-  unknown: { emoji: '⚠️', label: '無法判讀',             color: 'unknown' },
+  red:     { emoji: '\u{1F534}', label: '緊急 - IMMEDIATE', color: 'red' },
+  yellow:  { emoji: '\u{1F7E1}', label: '優先 - DELAYED',   color: 'yellow' },
+  green:   { emoji: '\u{1F7E2}', label: '一般 - MINOR',        color: 'green' },
+  black:   { emoji: '\u26AB',    label: '期待 - EXPECTANT',     color: 'black' },
+  unknown: { emoji: '\u26A0\uFE0F', label: '無法判讀',          color: 'unknown' },
 };
 
 // ── Screen management ──
@@ -410,6 +484,12 @@ async function uploadAudio(blob) {
   }
 }
 
+// ── Helpers ──
+function renderField(label, value) {
+  if (!value) return '';
+  return `<div class="result-field"><span class="field-label">${label}：</span>${value}</div>`;
+}
+
 // ── Show result ──
 function showResult(data) {
   const info = LEVEL_MAP[data.triage_level] || LEVEL_MAP.unknown;
@@ -432,21 +512,89 @@ function showResult(data) {
     actList.appendChild(li);
   });
 
+  // MIST section
+  const mistEl = document.getElementById('sectionMIST');
+  if (data.mist) {
+    const m = data.mist;
+    mistEl.innerHTML = `<div class="result-section-title">MIST 回報</div>` +
+      renderField('M 機轉', m.m_mechanism) +
+      renderField('I 傷勢', m.i_injuries) +
+      renderField('S 徵象', m.s_signs) +
+      renderField('T 處置', m.t_treatment);
+    mistEl.style.display = '';
+  } else { mistEl.style.display = 'none'; }
+
+  // MARCH section
+  const marchEl = document.getElementById('sectionMARCH');
+  if (data.march) {
+    const mc = data.march;
+    const fields = [
+      ['M 大出血', mc.m_hemorrhage],
+      ['A 呼吸道', mc.a_airway],
+      ['R 呼吸', mc.r_respiration],
+      ['C 循環', mc.c_circulation],
+      ['H 低體溫', mc.h_hypothermia],
+    ].filter(f => f[1]);
+    if (fields.length) {
+      marchEl.innerHTML = `<div class="result-section-title">MARCH 評估</div>` +
+        fields.map(f => renderField(f[0], f[1])).join('');
+      marchEl.style.display = '';
+    } else { marchEl.style.display = 'none'; }
+  } else { marchEl.style.display = 'none'; }
+
+  // Vitals section
+  const vitalsEl = document.getElementById('sectionVitals');
+  if (data.vitals) {
+    const v = data.vitals;
+    const vFields = [
+      ['意識', v.consciousness],
+      ['GCS', v.gcs],
+      ['HR', v.hr],
+      ['BP', v.bp],
+      ['SpO2', v.spo2],
+      ['Temp', v.temp],
+      ['RR', v.rr],
+    ].filter(f => f[1] != null);
+    if (vFields.length) {
+      vitalsEl.innerHTML = `<div class="result-section-title">生命徵象</div>` +
+        vFields.map(f => renderField(f[0], f[1])).join('');
+      vitalsEl.style.display = '';
+    } else { vitalsEl.style.display = 'none'; }
+  } else { vitalsEl.style.display = 'none'; }
+
+  // Tags section (trauma codes, mechanism, special population)
+  const tagsEl = document.getElementById('sectionTags');
+  const TRAUMA_MAP = {A:'開放性顱骨骨折',B:'顱底骨折',C:'顏面/呼吸道灼傷',D:'張力性氣胸',E:'氣胸/氣血胸',F:'開放性氣胸',G:'腹腔內出血',H:'大血管損傷',I:'雙側股骨骨折',J:'脫皮性損傷',K:'壓砸傷症候群',L:'骨盆骨折',M:'內臟外露',N:'燒燙傷',O:'OHCA',P:'斷肢'};
+  const MECH_MAP = {1:'爆炸',2:'槍傷',3:'銳物穿刺',4:'交通意外',5:'墜落',6:'化生放核毒',7:'生物襲咬',8:'氣壓傷',9:'高體溫/熱傷害',10:'低體溫/失溫',11:'溺水',12:'電擊傷'};
+  let tagHtml = '';
+  const tc = data.trauma_codes || [];
+  const mc2 = data.mechanism_codes || [];
+  const sp = data.special_population || [];
+  if (tc.length || mc2.length || sp.length) {
+    tagHtml = '<div class="result-section-title">分類標記</div><div class="result-tags">';
+    tc.forEach(c => { tagHtml += `<span class="result-tag">${c} ${TRAUMA_MAP[c]||c}</span>`; });
+    mc2.forEach(c => { tagHtml += `<span class="result-tag">${c} ${MECH_MAP[c]||c}</span>`; });
+    sp.forEach(s => { tagHtml += `<span class="result-tag">${s}</span>`; });
+    tagHtml += '</div>';
+    tagsEl.innerHTML = tagHtml;
+    tagsEl.style.display = '';
+  } else { tagsEl.style.display = 'none'; }
+
   document.getElementById('resultTranscript').textContent = `語音原文：${data.transcript}`;
 
-  // Buttons
+  // Buttons — Phase 1: confirm (no print) or retry
   const btnRow = document.getElementById('resultButtons');
   btnRow.innerHTML = '';
   if (data.triage_level !== 'unknown') {
-    const printBtn = document.createElement('button');
-    printBtn.className = 'btn btn-primary';
-    printBtn.textContent = '✅ 確認列印';
-    printBtn.onclick = () => printLabel(data);
-    btnRow.appendChild(printBtn);
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn btn-primary';
+    confirmBtn.textContent = '確認';
+    confirmBtn.onclick = () => showScreen('screenDone');
+    btnRow.appendChild(confirmBtn);
   }
   const retryBtn = document.createElement('button');
   retryBtn.className = 'btn btn-secondary';
-  retryBtn.textContent = '🔄 重新錄音';
+  retryBtn.textContent = '重新錄音';
   retryBtn.onclick = resetToIdle;
   btnRow.appendChild(retryBtn);
 
@@ -455,140 +603,23 @@ function showResult(data) {
   showScreen('screenResult');
 }
 
+// ── Hint toggle ──
+function toggleHint() {
+  const hint = document.getElementById('reportHint');
+  const btn = document.getElementById('btnHintToggle');
+  if (hint.style.display === 'none') {
+    hint.style.display = 'block';
+    btn.textContent = '收起提示';
+  } else {
+    hint.style.display = 'none';
+    btn.textContent = '口述提示 MIST';
+  }
+}
+
 function showError(msg) {
   document.getElementById('errorMsg').textContent = msg;
   showScreen('screenError');
 }
-
-// ── Bluetooth printer ──
-async function connectPrinter() {
-  if (!navigator.bluetooth) {
-    alert('此瀏覽器不支援 Web Bluetooth，請使用 Android Chrome');
-    return;
-  }
-  try {
-    bleDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [PRINTER_SERVICE_UUID] }],
-      optionalServices: [PRINTER_SERVICE_UUID],
-    });
-
-    bleDevice.addEventListener('gattserverdisconnected', () => {
-      printerConnected = false;
-      updatePrinterUI();
-    });
-
-    const server = await bleDevice.gatt.connect();
-    const service = await server.getPrimaryService(PRINTER_SERVICE_UUID);
-    bleCharacteristic = await service.getCharacteristic(PRINTER_CHAR_UUID);
-
-    printerConnected = true;
-    updatePrinterUI();
-  } catch (e) {
-    console.error('BLE connect error:', e);
-    // If service UUID filter fails, try accepting all printers
-    try {
-      bleDevice = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: [PRINTER_SERVICE_UUID],
-      });
-      const server = await bleDevice.gatt.connect();
-      const service = await server.getPrimaryService(PRINTER_SERVICE_UUID);
-      bleCharacteristic = await service.getCharacteristic(PRINTER_CHAR_UUID);
-      printerConnected = true;
-      updatePrinterUI();
-    } catch (e2) {
-      alert('印表機連線失敗：' + e2.message);
-    }
-  }
-}
-
-function updatePrinterUI() {
-  const dot = document.getElementById('printerDot');
-  const label = document.getElementById('printerLabel');
-  if (printerConnected) {
-    dot.classList.add('connected');
-    label.textContent = '已連線';
-  } else {
-    dot.classList.remove('connected');
-    label.textContent = '印表機未連線';
-  }
-}
-
-// ── ESC/POS print ──
-async function printLabel(data) {
-  if (!printerConnected || !bleCharacteristic) {
-    alert('請先連線印表機');
-    return;
-  }
-
-  const info = LEVEL_MAP[data.triage_level] || LEVEL_MAP.unknown;
-  const ts = new Date(data.timestamp);
-  const timeStr = `${ts.getFullYear()}/${String(ts.getMonth()+1).padStart(2,'0')}/${String(ts.getDate()).padStart(2,'0')} ${String(ts.getHours()).padStart(2,'0')}:${String(ts.getMinutes()).padStart(2,'0')}`;
-
-  // Build ESC/POS commands
-  const encoder = new TextEncoder();
-  const cmds = [];
-
-  // Initialize printer
-  cmds.push(new Uint8Array([0x1B, 0x40]));
-  // Set Chinese mode (codepage)
-  cmds.push(new Uint8Array([0x1C, 0x26])); // FS & — select Chinese mode
-
-  // === Header separator ===
-  cmds.push(encoder.encode('================================\n'));
-
-  // Bold + double height for level
-  cmds.push(new Uint8Array([0x1B, 0x45, 0x01])); // bold on
-  cmds.push(new Uint8Array([0x1D, 0x21, 0x01])); // double height
-  cmds.push(encoder.encode(`${info.emoji} ${data.triage_label}\n`));
-  cmds.push(new Uint8Array([0x1D, 0x21, 0x00])); // normal size
-  cmds.push(new Uint8Array([0x1B, 0x45, 0x00])); // bold off
-
-  cmds.push(encoder.encode('================================\n'));
-  cmds.push(encoder.encode(`時間：${timeStr}\n`));
-  cmds.push(encoder.encode(`編號：#${data.case_id}\n`));
-  cmds.push(encoder.encode('--------------------------------\n'));
-  cmds.push(encoder.encode('傷況摘要：\n'));
-  cmds.push(encoder.encode(`${data.summary}\n\n`));
-  cmds.push(encoder.encode('建議處置：\n'));
-  (data.actions || []).forEach(a => {
-    cmds.push(encoder.encode(`- ${a}\n`));
-  });
-  cmds.push(encoder.encode('================================\n'));
-
-  // Feed and cut
-  cmds.push(new Uint8Array([0x1B, 0x64, 0x04])); // feed 4 lines
-
-  // Send all commands in chunks (BLE MTU is typically 20 bytes)
-  const fullData = concatUint8Arrays(cmds);
-  const CHUNK_SIZE = 20;
-
-  try {
-    for (let i = 0; i < fullData.length; i += CHUNK_SIZE) {
-      const chunk = fullData.slice(i, i + CHUNK_SIZE);
-      await bleCharacteristic.writeValueWithoutResponse(chunk);
-      // Small delay between chunks for printer buffer
-      await sleep(50);
-    }
-    showScreen('screenDone');
-  } catch (e) {
-    console.error('Print error:', e);
-    printerConnected = false;
-    updatePrinterUI();
-    alert('列印失敗，印表機可能已斷線：' + e.message);
-  }
-}
-
-function concatUint8Arrays(arrays) {
-  let totalLen = 0;
-  arrays.forEach(a => totalLen += a.length);
-  const result = new Uint8Array(totalLen);
-  let offset = 0;
-  arrays.forEach(a => { result.set(a, offset); offset += a.length; });
-  return result;
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 </script>
 </body>
 </html>

@@ -1,6 +1,7 @@
 """STAT — Speech Triage And Tag: FastAPI backend."""
 
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -15,7 +16,12 @@ from triage import triage
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="STAT API", version="0.1.0")
+app = FastAPI(title="STAT API", version="0.2.0")
+
+# Secret path for access control
+APP_SECRET_PATH = os.environ.get("APP_SECRET_PATH", "")
+if not APP_SECRET_PATH:
+    logger.warning("APP_SECRET_PATH is not set — all routes will be inaccessible")
 
 # CORS — allow all origins for POC
 app.add_middleware(
@@ -33,7 +39,7 @@ TW_TZ = timezone(timedelta(hours=8))
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 
 
-@app.post("/transcribe-and-triage")
+@app.post(f"/s/{APP_SECRET_PATH}/transcribe-and-triage")
 async def transcribe_and_triage(audio_file: UploadFile = File(...)):
     """Receive audio, transcribe, run START triage, return result."""
     global _case_counter
@@ -58,7 +64,7 @@ async def transcribe_and_triage(audio_file: UploadFile = File(...)):
             "message": f"語音辨識失敗：{e}",
         })
 
-    # Step 2: Claude triage
+    # Step 2: Gemini triage
     try:
         result = triage(transcript)
     except RuntimeError as e:
@@ -79,13 +85,19 @@ async def transcribe_and_triage(audio_file: UploadFile = File(...)):
         "triage_label": result["triage_label"],
         "summary": result["summary"],
         "actions": result["actions"],
+        "march": result.get("march"),
+        "vitals": result.get("vitals"),
+        "trauma_codes": result.get("trauma_codes", []),
+        "mechanism_codes": result.get("mechanism_codes", []),
+        "special_population": result.get("special_population", []),
+        "mist": result.get("mist"),
         "timestamp": now.isoformat(),
         "case_id": f"{_case_counter:03d}",
     })
 
 
-# Serve frontend
-@app.get("/")
+# Serve frontend at secret path
+@app.get(f"/s/{APP_SECRET_PATH}/")
 async def serve_index():
     index_path = FRONTEND_DIR / "index.html"
     if index_path.exists():
@@ -93,6 +105,10 @@ async def serve_index():
     return JSONResponse(content={"message": "STAT API is running"})
 
 
-# Mount frontend static files (if any assets exist later)
+# Mount frontend static files under secret path
 if FRONTEND_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+    app.mount(
+        f"/s/{APP_SECRET_PATH}/static",
+        StaticFiles(directory=str(FRONTEND_DIR)),
+        name="static",
+    )
