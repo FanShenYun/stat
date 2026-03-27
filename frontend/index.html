@@ -327,7 +327,7 @@
       <div class="recording-info">
         <span class="recording-dot"></span>錄音中... <span id="recordTime">0</span> 秒
       </div>
-      <div class="recording-info">最長 20 秒自動停止</div>
+      <div class="recording-info">最長 30 秒自動停止</div>
     </div>
 
     <!-- Processing Screen -->
@@ -374,7 +374,7 @@
 // Derive API base from current page path (includes /s/{secret}/)
 const pagePath = window.location.pathname.replace(/\/+$/, '');
 const API_BASE = window.location.origin + pagePath;
-const MAX_RECORD_SEC = 20;
+const MAX_RECORD_SEC = 30;
 const MIN_RECORD_SEC = 2;
 
 // ── State ──

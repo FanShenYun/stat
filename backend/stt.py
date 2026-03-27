@@ -1,25 +1,12 @@
-"""Google Cloud Speech-to-Text module for STAT."""
+"""OpenAI Whisper Speech-to-Text module for STAT."""
 
-import json
 import os
 
-from google.cloud import speech
-from google.oauth2 import service_account
-
-
-def _get_stt_client() -> speech.SpeechClient:
-    """Create a Speech-to-Text client from environment credentials."""
-    creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-    if not creds_json:
-        raise RuntimeError("GOOGLE_APPLICATION_CREDENTIALS_JSON is not set")
-
-    info = json.loads(creds_json)
-    credentials = service_account.Credentials.from_service_account_info(info)
-    return speech.SpeechClient(credentials=credentials)
+from openai import OpenAI
 
 
 def transcribe(audio_bytes: bytes) -> str:
-    """Transcribe WebM/Opus audio bytes to text using Google Cloud STT.
+    """Transcribe WebM/Opus audio bytes to text using OpenAI Whisper.
 
     Args:
         audio_bytes: Raw audio file content (WebM format).
@@ -30,25 +17,20 @@ def transcribe(audio_bytes: bytes) -> str:
     Raises:
         RuntimeError: If transcription fails or returns no results.
     """
-    client = _get_stt_client()
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set")
 
-    audio = speech.RecognitionAudio(content=audio_bytes)
-    config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-        sample_rate_hertz=48000,
-        language_code="zh-TW",
+    client = OpenAI(api_key=api_key)
+
+    response = client.audio.transcriptions.create(
+        model="whisper-1",
+        file=("recording.webm", audio_bytes),
+        language="zh",
     )
 
-    response = client.recognize(config=config, audio=audio)
-
-    if not response.results:
-        raise RuntimeError("語音辨識未回傳任何結果")
-
-    transcript = "".join(
-        result.alternatives[0].transcript for result in response.results
-    )
-
-    if not transcript.strip():
+    transcript = response.text.strip()
+    if not transcript:
         raise RuntimeError("語音辨識結果為空")
 
-    return transcript.strip()
+    return transcript
