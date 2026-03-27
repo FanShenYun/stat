@@ -105,6 +105,14 @@ async def serve_index():
     return JSONResponse(content={"message": "STAT API is running"})
 
 
+@app.get(f"/s/{APP_SECRET_PATH}/ble-test")
+async def serve_ble_test():
+    ble_path = FRONTEND_DIR / "ble-test.html"
+    if ble_path.exists():
+        return FileResponse(ble_path)
+    return JSONResponse(status_code=404, content={"message": "Not found"})
+
+
 # Mount frontend static files under secret path
 if FRONTEND_DIR.exists():
     app.mount(

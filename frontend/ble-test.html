@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BLE 印表機測試</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --surface: #16213e;
+    --text: #e0e0e0;
+    --text-muted: #888;
+    --accent: #3498db;
+    --green: #2ecc71;
+    --red: #e74c3c;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Noto Sans TC", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+    display: flex;
+    justify-content: center;
+    padding: 16px;
+  }
+  .container {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  h1 { font-size: 20px; text-align: center; padding: 12px 0; }
+  .card {
+    background: var(--surface);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .card h2 { font-size: 15px; color: var(--accent); margin-bottom: 10px; }
+  .btn {
+    width: 100%;
+    padding: 14px;
+    border: none;
+    border-radius: 10px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-green { background: var(--green); color: #fff; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .status {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+  .status.connected { color: var(--green); }
+  .status.error { color: var(--red); }
+  .log {
+    background: #0d1117;
+    border-radius: 8px;
+    padding: 12px;
+    font-family: monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .log .ok { color: var(--green); }
+  .log .err { color: var(--red); }
+  .log .info { color: var(--accent); }
+  input[type="text"] {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ffffff20;
+    border-radius: 8px;
+    background: #0d1117;
+    color: var(--text);
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>BLE 印表機測試</h1>
+
+  <!-- Step 1: Connect -->
+  <div class="card">
+    <h2>Step 1 — 連線 QIU-C15</h2>
+    <button class="btn btn-primary" id="btnConnect" onclick="connectPrinter()">搜尋並連線印表機</button>
+    <div class="status" id="statusConnect" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Step 2: Send test data -->
+  <div class="card">
+    <h2>Step 2 — 測試寫入</h2>
+    <input type="text" id="inputText" value="Hello BLE Printer" placeholder="輸入測試文字">
+    <button class="btn btn-green" id="btnSend" onclick="sendTestData()" disabled>送出測試資料</button>
+    <div class="status" id="statusSend" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Log -->
+  <div class="card">
+    <h2>Log</h2>
+    <div class="log" id="logArea"></div>
+  </div>
+</div>
+
+<script>
+// ── BLE UUIDs (from nRF Connect scan) ──
+const PRINTER_SERVICE_UUID    = 0xAE30;
+const PRINTER_WRITE_CHAR_UUID = 0xAE01;
+const PRINTER_NOTIFY_CHAR_UUID = 0xAE02;
+
+let bleDevice = null;
+let bleServer = null;
+let writeChar = null;
+let notifyChar = null;
+
+const logArea = document.getElementById('logArea');
+
+function log(msg, type = '') {
+  const span = document.createElement('span');
+  span.className = type;
+  span.textContent = `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+  logArea.appendChild(span);
+  logArea.scrollTop = logArea.scrollHeight;
+}
+
+function setStatus(id, text, cls = '') {
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = 'status' + (cls ? ' ' + cls : '');
+}
+
+// ── Step 1: Connect ──
+async function connectPrinter() {
+  try {
+    log('正在搜尋 BLE 裝置...', 'info');
+    setStatus('statusConnect', '搜尋中...');
+
+    // Request device with the printer service
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: [PRINTER_SERVICE_UUID] }],
+      optionalServices: []
+    });
+
+    log(`找到裝置: ${bleDevice.name || bleDevice.id}`, 'ok');
+
+    // Listen for disconnect
+    bleDevice.addEventListener('gattserverdisconnected', () => {
+      log('裝置已斷線', 'err');
+      setStatus('statusConnect', '已斷線', 'error');
+      document.getElementById('btnSend').disabled = true;
+      writeChar = null;
+      notifyChar = null;
+    });
+
+    // Connect to GATT server
+    log('正在連線 GATT Server...', 'info');
+    bleServer = await bleDevice.gatt.connect();
+    log('GATT Server 已連線', 'ok');
+
+    // Get service
+    log(`正在取得 Service 0x${PRINTER_SERVICE_UUID.toString(16).toUpperCase()}...`, 'info');
+    const service = await bleServer.getPrimaryService(PRINTER_SERVICE_UUID);
+    log('Service 取得成功', 'ok');
+
+    // Get write characteristic
+    log(`正在取得 Write Characteristic 0x${PRINTER_WRITE_CHAR_UUID.toString(16).toUpperCase()}...`, 'info');
+    writeChar = await service.getCharacteristic(PRINTER_WRITE_CHAR_UUID);
+    log(`Write Characteristic 取得成功 (properties: ${formatProperties(writeChar.properties)})`, 'ok');
+
+    // Get notify characteristic
+    try {
+      notifyChar = await service.getCharacteristic(PRINTER_NOTIFY_CHAR_UUID);
+      log(`Notify Characteristic 取得成功`, 'ok');
+
+      await notifyChar.startNotifications();
+      notifyChar.addEventListener('characteristicvaluechanged', (event) => {
+        const value = event.target.value;
+        const bytes = new Uint8Array(value.buffer);
+        const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        log(`印表機回應: [${hex}]`, 'info');
+      });
+      log('已啟用 Notify 監聽', 'ok');
+    } catch (e) {
+      log(`Notify 設定失敗 (非致命): ${e.message}`, 'err');
+    }
+
+    setStatus('statusConnect', `已連線: ${bleDevice.name || bleDevice.id}`, 'connected');
+    document.getElementById('btnSend').disabled = false;
+    log('連線完成，可以開始測試寫入', 'ok');
+
+  } catch (e) {
+    log(`連線失敗: ${e.message}`, 'err');
+    setStatus('statusConnect', `連線失敗: ${e.message}`, 'error');
+  }
+}
+
+// ── Step 2: Send test data ──
+async function sendTestData() {
+  if (!writeChar) {
+    log('尚未連線', 'err');
+    return;
+  }
+
+  const text = document.getElementById('inputText').value;
+  if (!text) {
+    log('請輸入測試文字', 'err');
+    return;
+  }
+
+  try {
+    // ESC/POS: Initialize printer
+    const ESC = 0x1B;
+    const GS = 0x1D;
+    const LF = 0x0A;
+
+    // Build ESC/POS command sequence
+    const initCmd = new Uint8Array([ESC, 0x40]);          // ESC @ — Initialize
+    const textBytes = new TextEncoder().encode(text);      // UTF-8 text
+    const feedCut = new Uint8Array([LF, LF, LF, GS, 0x56, 0x00]); // Feed + GS V 0 — Full cut
+
+    // Combine all into one buffer
+    const payload = new Uint8Array([
+      ...initCmd,
+      ...textBytes,
+      ...feedCut
+    ]);
+
+    log(`送出 ${payload.length} bytes...`, 'info');
+    log(`Hex: ${Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(' ')}`, 'info');
+
+    // BLE MTU is typically 20 bytes, send in chunks
+    const MTU = 20;
+    for (let i = 0; i < payload.length; i += MTU) {
+      const chunk = payload.slice(i, i + MTU);
+      await writeChar.writeValueWithoutResponse(chunk);
+      log(`  chunk ${Math.floor(i / MTU) + 1}: ${chunk.length} bytes sent`, 'ok');
+    }
+
+    log('資料送出完成！檢查印表機是否有反應', 'ok');
+    setStatus('statusSend', '送出成功', 'connected');
+
+  } catch (e) {
+    log(`送出失敗: ${e.message}`, 'err');
+    setStatus('statusSend', `送出失敗: ${e.message}`, 'error');
+  }
+}
+
+// ── Helpers ──
+function formatProperties(props) {
+  const flags = [];
+  if (props.read) flags.push('Read');
+  if (props.write) flags.push('Write');
+  if (props.writeWithoutResponse) flags.push('WriteNoResp');
+  if (props.notify) flags.push('Notify');
+  if (props.indicate) flags.push('Indicate');
+  return flags.join(', ');
+}
+</script>
+</body>
+</html>
