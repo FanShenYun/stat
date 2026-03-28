@@ -5,7 +5,12 @@
       "Bash(git branch:*)",
       "Bash(git add:*)",
       "Bash(git remote:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:werwolv.net)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:pacochan.net)"
     ]
   }
 }
