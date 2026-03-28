@@ -46,7 +46,7 @@
 
   .status-bar {
     display: flex;
-    justify-content: flex-end;
+    justify-content: space-between;
     align-items: center;
     padding: 10px 14px;
     background: var(--surface);
@@ -55,6 +55,27 @@
     font-size: 14px;
   }
   .status-bar .case-count { color: var(--text-muted); }
+
+  .ble-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .ble-dot {
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--gray);
+    flex-shrink: 0;
+  }
+  .ble-dot.connected { background: var(--green); }
+  .ble-dot.connecting { background: var(--yellow); animation: pulse 1s infinite; }
+  .ble-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .ble-label.connected { color: var(--green); }
 
   .main-area {
     flex: 1;
@@ -279,8 +300,13 @@
   </header>
 
   <div class="status-bar">
+    <div class="ble-status" id="bleStatus" onclick="connectPrinter()">
+      <span class="ble-dot" id="bleDot"></span>
+      <span class="ble-label" id="bleLabel">連線印表機</span>
+    </div>
     <div class="case-count">已處理：<span id="caseCount">0</span> 人</div>
   </div>
+  <canvas id="printCanvas" style="display:none;"></canvas>
 
   <div class="main-area">
     <!-- Idle Screen -->
@@ -352,10 +378,16 @@
       <div class="btn-row" id="resultButtons"></div>
     </div>
 
+    <!-- Printing Screen -->
+    <div class="screen" id="screenPrinting">
+      <div class="spinner"></div>
+      <div style="font-size:16px; margin-top:8px;" id="printProgress">列印中...</div>
+    </div>
+
     <!-- Done Screen -->
     <div class="screen" id="screenDone">
       <div style="font-size:48px;">&#x2705;</div>
-      <div style="font-size:18px;">已完成</div>
+      <div style="font-size:18px;" id="doneMsg">已完成</div>
       <button class="btn btn-primary" onclick="resetToIdle()" style="margin-top:12px;">下一位傷患</button>
     </div>
 
@@ -582,14 +614,19 @@ function showResult(data) {
 
   document.getElementById('resultTranscript').textContent = `語音原文：${data.transcript}`;
 
-  // Buttons — Phase 1: confirm (no print) or retry
+  // Buttons
   const btnRow = document.getElementById('resultButtons');
   btnRow.innerHTML = '';
   if (data.triage_level !== 'unknown') {
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'btn btn-primary';
-    confirmBtn.textContent = '確認';
-    confirmBtn.onclick = () => showScreen('screenDone');
+    if (bleConnected()) {
+      confirmBtn.textContent = '確認列印';
+      confirmBtn.onclick = () => confirmAndPrint(data);
+    } else {
+      confirmBtn.textContent = '確認';
+      confirmBtn.onclick = () => showScreen('screenDone');
+    }
     btnRow.appendChild(confirmBtn);
   }
   const retryBtn = document.createElement('button');
@@ -619,6 +656,428 @@ function toggleHint() {
 function showError(msg) {
   document.getElementById('errorMsg').textContent = msg;
   showScreen('screenError');
+}
+
+// ══════════════════════════════════════════════
+// ── MXW01 BLE Printer Protocol ──
+// ══════════════════════════════════════════════
+
+const SERVICE_UUID = 0xAE30;
+const CTRL_CHAR   = 0xAE01;
+const NOTIFY_CHAR = 0xAE02;
+const DATA_CHAR   = 0xAE03;
+
+const IMG_WIDTH_PX    = 384;
+const IMG_WIDTH_BYTES = 48;
+const MIN_DATA_BYTES  = 4320;
+
+const CMD_GET_STATUS    = 0xA1;
+const CMD_SET_INTENSITY = 0xA2;
+const CMD_PRINT_REQUEST = 0xA9;
+const CMD_PRINT_COMPLETE = 0xAA;
+const CMD_FLUSH_DATA    = 0xAD;
+
+const CRC8_TABLE = [
+  0x00,0x07,0x0e,0x09,0x1c,0x1b,0x12,0x15,0x38,0x3f,0x36,0x31,0x24,0x23,0x2a,0x2d,
+  0x70,0x77,0x7e,0x79,0x6c,0x6b,0x62,0x65,0x48,0x4f,0x46,0x41,0x54,0x53,0x5a,0x5d,
+  0xe0,0xe7,0xee,0xe9,0xfc,0xfb,0xf2,0xf5,0xd8,0xdf,0xd6,0xd1,0xc4,0xc3,0xca,0xcd,
+  0x90,0x97,0x9e,0x99,0x8c,0x8b,0x82,0x85,0xa8,0xaf,0xa6,0xa1,0xb4,0xb3,0xba,0xbd,
+  0xc7,0xc0,0xc9,0xce,0xdb,0xdc,0xd5,0xd2,0xff,0xf8,0xf1,0xf6,0xe3,0xe4,0xed,0xea,
+  0xb7,0xb0,0xb9,0xbe,0xab,0xac,0xa5,0xa2,0x8f,0x88,0x81,0x86,0x93,0x94,0x9d,0x9a,
+  0x27,0x20,0x29,0x2e,0x3b,0x3c,0x35,0x32,0x1f,0x18,0x11,0x16,0x03,0x04,0x0d,0x0a,
+  0x57,0x50,0x59,0x5e,0x4b,0x4c,0x45,0x42,0x6f,0x68,0x61,0x66,0x73,0x74,0x7d,0x7a,
+  0x89,0x8e,0x87,0x80,0x95,0x92,0x9b,0x9c,0xb1,0xb6,0xbf,0xb8,0xad,0xaa,0xa3,0xa4,
+  0xf9,0xfe,0xf7,0xf0,0xe5,0xe2,0xeb,0xec,0xc1,0xc6,0xcf,0xc8,0xdd,0xda,0xd3,0xd4,
+  0x69,0x6e,0x67,0x60,0x75,0x72,0x7b,0x7c,0x51,0x56,0x5f,0x58,0x4d,0x4a,0x43,0x44,
+  0x19,0x1e,0x17,0x10,0x05,0x02,0x0b,0x0c,0x21,0x26,0x2f,0x28,0x3d,0x3a,0x33,0x34,
+  0x4e,0x49,0x40,0x47,0x52,0x55,0x5c,0x5b,0x76,0x71,0x78,0x7f,0x6a,0x6d,0x64,0x63,
+  0x3e,0x39,0x30,0x37,0x22,0x25,0x2c,0x2b,0x06,0x01,0x08,0x0f,0x1a,0x1d,0x14,0x13,
+  0xae,0xa9,0xa0,0xa7,0xb2,0xb5,0xbc,0xbb,0x96,0x91,0x98,0x9f,0x8a,0x8d,0x84,0x83,
+  0xde,0xd9,0xd0,0xd7,0xc2,0xc5,0xcc,0xcb,0xe6,0xe1,0xe8,0xef,0xfa,0xfd,0xf4,0xf3,
+];
+
+function crc8(data) {
+  let crc = 0;
+  for (const b of data) crc = CRC8_TABLE[(crc ^ b) & 0xFF];
+  return crc & 0xFF;
+}
+
+function buildPacket(cmdId, payload) {
+  const len = payload.length;
+  const packet = new Uint8Array(6 + len + 2);
+  packet[0] = 0x22;
+  packet[1] = 0x21;
+  packet[2] = cmdId;
+  packet[3] = 0x00;
+  packet[4] = len & 0xFF;
+  packet[5] = (len >> 8) & 0xFF;
+  packet.set(payload, 6);
+  packet[6 + len] = crc8(payload);
+  packet[7 + len] = 0xFF;
+  return packet;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ── BLE State ──
+let bleDevice = null;
+let ctrlChar = null;
+let notifyChar = null;
+let dataChar = null;
+let pendingResolve = null;
+let pendingCmdId = null;
+
+function bleConnected() {
+  return bleDevice && bleDevice.gatt.connected && ctrlChar && dataChar;
+}
+
+function updateBleUI(state, text) {
+  const dot = document.getElementById('bleDot');
+  const label = document.getElementById('bleLabel');
+  dot.className = 'ble-dot' + (state === 'connected' ? ' connected' : state === 'connecting' ? ' connecting' : '');
+  label.className = 'ble-label' + (state === 'connected' ? ' connected' : '');
+  label.textContent = text;
+}
+
+function onNotify(event) {
+  const bytes = new Uint8Array(event.target.value.buffer);
+  if (bytes.length >= 8 && bytes[0] === 0x22 && bytes[1] === 0x21) {
+    const cmdId = bytes[2];
+    const payloadLen = bytes[4] | (bytes[5] << 8);
+    const payload = bytes.slice(6, 6 + payloadLen);
+    if (pendingResolve && pendingCmdId === cmdId) {
+      pendingResolve(payload);
+    }
+  }
+}
+
+function waitForNotify(cmdId, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    pendingCmdId = cmdId;
+    const timer = setTimeout(() => {
+      pendingResolve = null;
+      pendingCmdId = null;
+      reject(new Error(`回應逾時`));
+    }, timeoutMs);
+    pendingResolve = (data) => {
+      clearTimeout(timer);
+      pendingResolve = null;
+      pendingCmdId = null;
+      resolve(data);
+    };
+  });
+}
+
+async function sendCmd(cmdId, payload) {
+  const packet = buildPacket(cmdId, new Uint8Array(payload));
+  await ctrlChar.writeValueWithoutResponse(packet);
+}
+
+async function connectPrinter() {
+  if (bleConnected()) return; // already connected
+  try {
+    updateBleUI('connecting', '搜尋中...');
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'MXW' }],
+      optionalServices: [SERVICE_UUID],
+    });
+
+    bleDevice.addEventListener('gattserverdisconnected', () => {
+      ctrlChar = dataChar = notifyChar = null;
+      updateBleUI('', '連線印表機');
+    });
+
+    updateBleUI('connecting', '連線中...');
+    const server = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE_UUID);
+    ctrlChar = await service.getCharacteristic(CTRL_CHAR);
+    dataChar = await service.getCharacteristic(DATA_CHAR);
+    notifyChar = await service.getCharacteristic(NOTIFY_CHAR);
+    await notifyChar.startNotifications();
+    notifyChar.addEventListener('characteristicvaluechanged', onNotify);
+
+    updateBleUI('connected', bleDevice.name || '已連線');
+  } catch (e) {
+    ctrlChar = dataChar = notifyChar = null;
+    updateBleUI('', '連線印表機');
+  }
+}
+
+// ══════════════════════════════════════════════
+// ── Label Rendering ──
+// ══════════════════════════════════════════════
+
+// 黑白熱感應標籤 — 用圖案區分級別
+const LEVEL_LABEL_MAP = {
+  red:    { text: '緊急 IMMEDIATE', style: 'inverted' },    // 全黑底反白字
+  yellow: { text: '優先 DELAYED',   style: 'thick-border' }, // 粗黑框
+  green:  { text: '一般 MINOR',     style: 'thin-border' },  // 細框
+  black:  { text: '期待 EXPECTANT', style: 'cross' },        // 全黑底反白 + 交叉線
+};
+
+function renderTriageLabel(data) {
+  const canvas = document.getElementById('printCanvas');
+  const W = IMG_WIDTH_PX;
+  const levelInfo = LEVEL_LABEL_MAP[data.triage_level] || LEVEL_LABEL_MAP.green;
+
+  const ctx = canvas.getContext('2d');
+  canvas.width = W;
+
+  // Pre-calculate layout heights
+  const PADDING = 8;
+  const HEADER_H = 48;
+  const META_H = 24;
+  const GAP = 6;
+
+  // Prepare text blocks to measure height
+  const font = '"Noto Sans TC", "Microsoft JhengHei", sans-serif';
+
+  // Summary text wrapping
+  ctx.font = `bold 18px ${font}`;
+  const summaryLines = wrapText(ctx, data.summary || '', W - PADDING * 2);
+
+  // Actions
+  const actions = data.actions || [];
+  ctx.font = `14px ${font}`;
+  const actionLines = actions.map(a => '- ' + a);
+
+  // MIST
+  const mistLines = [];
+  if (data.mist) {
+    const m = data.mist;
+    if (m.m_mechanism) mistLines.push('M機轉: ' + m.m_mechanism);
+    if (m.i_injuries)  mistLines.push('I傷勢: ' + m.i_injuries);
+    if (m.s_signs)     mistLines.push('S徵象: ' + m.s_signs);
+    if (m.t_treatment) mistLines.push('T處置: ' + m.t_treatment);
+  }
+
+  // Calculate total height
+  let totalH = PADDING + HEADER_H + GAP + META_H + GAP;
+  totalH += summaryLines.length * 22 + GAP;
+  if (actionLines.length) totalH += actionLines.length * 18 + GAP;
+  if (mistLines.length) totalH += 20 + mistLines.length * 18 + GAP;
+  totalH += PADDING + 8; // bottom padding + margin
+
+  // Ensure minimum height
+  totalH = Math.max(totalH, MIN_DATA_BYTES / IMG_WIDTH_BYTES);
+  canvas.height = totalH;
+
+  // White background
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, W, totalH);
+
+  let y = PADDING;
+
+  // ── Header bar (triage level) — 黑白圖案區分 ──
+  const style = levelInfo.style;
+  ctx.font = `bold 28px ${font}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  if (style === 'inverted' || style === 'cross') {
+    // 全黑底 + 白字
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, y, W, HEADER_H);
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillText(levelInfo.text, W / 2, y + HEADER_H / 2);
+    if (style === 'cross') {
+      // 加交叉線標記
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(4, y + 4);
+      ctx.lineTo(W - 4, y + HEADER_H - 4);
+      ctx.moveTo(W - 4, y + 4);
+      ctx.lineTo(4, y + HEADER_H - 4);
+      ctx.stroke();
+    }
+  } else if (style === 'thick-border') {
+    // 粗黑框 + 黑字
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(3, y + 3, W - 6, HEADER_H - 6);
+    ctx.fillStyle = '#000000';
+    ctx.fillText(levelInfo.text, W / 2, y + HEADER_H / 2);
+  } else {
+    // 細框 + 黑字
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(4, y + 4, W - 8, HEADER_H - 8);
+    ctx.fillStyle = '#000000';
+    ctx.fillText(levelInfo.text, W / 2, y + HEADER_H / 2);
+  }
+  y += HEADER_H + GAP;
+
+  // ── Case ID + timestamp ──
+  ctx.fillStyle = '#000000';
+  ctx.font = `bold 16px ${font}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const ts = new Date(data.timestamp);
+  const timeStr = `${ts.getFullYear()}/${String(ts.getMonth()+1).padStart(2,'0')}/${String(ts.getDate()).padStart(2,'0')} ${String(ts.getHours()).padStart(2,'0')}:${String(ts.getMinutes()).padStart(2,'0')}`;
+  ctx.fillText(`#${data.case_id}   ${timeStr}`, PADDING, y);
+  y += META_H + GAP;
+
+  // ── Separator ──
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(PADDING, y);
+  ctx.lineTo(W - PADDING, y);
+  ctx.stroke();
+  y += GAP;
+
+  // ── Summary ──
+  ctx.font = `bold 18px ${font}`;
+  for (const line of summaryLines) {
+    ctx.fillText(line, PADDING, y);
+    y += 22;
+  }
+  y += GAP;
+
+  // ── Actions ──
+  if (actionLines.length) {
+    ctx.font = `14px ${font}`;
+    for (const line of actionLines) {
+      ctx.fillText(line, PADDING, y);
+      y += 18;
+    }
+    y += GAP;
+  }
+
+  // ── MIST ──
+  if (mistLines.length) {
+    ctx.strokeStyle = '#AAAAAA';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(PADDING, y);
+    ctx.lineTo(W - PADDING, y);
+    ctx.stroke();
+    y += GAP;
+    ctx.font = `bold 14px ${font}`;
+    ctx.fillText('MIST', PADDING, y);
+    y += 20;
+    ctx.font = `13px ${font}`;
+    for (const line of mistLines) {
+      const wrapped = wrapText(ctx, line, W - PADDING * 2);
+      for (const wl of wrapped) {
+        ctx.fillText(wl, PADDING, y);
+        y += 18;
+      }
+    }
+  }
+
+  // Convert to 1bpp bitmap (LSB-first, 1=black)
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = imgData.data;
+  const rows = canvas.height;
+  const bitmap = new Uint8Array(rows * IMG_WIDTH_BYTES);
+
+  for (let row = 0; row < rows; row++) {
+    for (let x = 0; x < IMG_WIDTH_PX; x++) {
+      const idx = (row * IMG_WIDTH_PX + x) * 4;
+      const gray = pixels[idx] * 0.299 + pixels[idx+1] * 0.587 + pixels[idx+2] * 0.114;
+      if (gray < 128) {
+        bitmap[row * IMG_WIDTH_BYTES + Math.floor(x / 8)] |= (1 << (x % 8));
+      }
+    }
+  }
+
+  if (bitmap.length < MIN_DATA_BYTES) {
+    const padded = new Uint8Array(MIN_DATA_BYTES);
+    padded.set(bitmap);
+    return padded;
+  }
+  return bitmap;
+}
+
+function wrapText(ctx, text, maxWidth) {
+  const lines = [];
+  let line = '';
+  for (const ch of text) {
+    const test = line + ch;
+    if (ctx.measureText(test).width > maxWidth && line) {
+      lines.push(line);
+      line = ch;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [''];
+}
+
+// ══════════════════════════════════════════════
+// ── Print Flow ──
+// ══════════════════════════════════════════════
+
+async function confirmAndPrint(data) {
+  if (!bleConnected()) {
+    showScreen('screenDone');
+    return;
+  }
+
+  showScreen('screenPrinting');
+  const progress = document.getElementById('printProgress');
+
+  try {
+    progress.textContent = '渲染標籤...';
+    const bitmap = renderTriageLabel(data);
+    const totalRows = bitmap.length / IMG_WIDTH_BYTES;
+
+    progress.textContent = '設定印表機...';
+    await sendCmd(CMD_SET_INTENSITY, [93]);
+    await sleep(50);
+
+    // Get status (optional, continue on timeout)
+    try {
+      const sp = waitForNotify(CMD_GET_STATUS, 3000);
+      await sendCmd(CMD_GET_STATUS, [0x00]);
+      await sp;
+    } catch (_) {}
+    await sleep(50);
+
+    // Print request
+    progress.textContent = '送出列印請求...';
+    const linesLo = totalRows & 0xFF;
+    const linesHi = (totalRows >> 8) & 0xFF;
+    const ackPromise = waitForNotify(CMD_PRINT_REQUEST, 5000);
+    await sendCmd(CMD_PRINT_REQUEST, [linesLo, linesHi, 0x30, 0x00]);
+    try {
+      const ack = await ackPromise;
+      if (ack[0] !== 0) {
+        showError('印表機拒絕列印');
+        return;
+      }
+    } catch (_) {}
+
+    // Send image data
+    const CHUNK = IMG_WIDTH_BYTES;
+    let sent = 0;
+    for (let i = 0; i < bitmap.length; i += CHUNK) {
+      const chunk = bitmap.slice(i, i + CHUNK);
+      await dataChar.writeValueWithoutResponse(chunk);
+      sent += chunk.length;
+      const pct = Math.round(sent / bitmap.length * 100);
+      progress.textContent = `傳送資料 ${pct}%`;
+      await sleep(15);
+    }
+
+    // Flush
+    await sendCmd(CMD_FLUSH_DATA, [0x00]);
+    progress.textContent = '列印中...';
+
+    // Wait for print complete
+    try {
+      await waitForNotify(CMD_PRINT_COMPLETE, 20000);
+    } catch (_) {}
+
+    document.getElementById('doneMsg').textContent = '列印完成';
+    showScreen('screenDone');
+
+  } catch (e) {
+    showError('列印失敗：' + e.message);
+  }
 }
 </script>
 </body>
