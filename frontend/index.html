@@ -922,12 +922,13 @@ function renderTriageLabel(data) {
 
   // Calculate total height
   let totalH = PADDING + HEADER_H + GAP + META_H + GAP;
+  totalH += GAP; // separator line before summary
   totalH += summaryLines.length * SUMMARY_LH + GAP;
   if (actionWrapped.length) totalH += actionWrapped.length * ACTION_LH + GAP;
-  if (vitalsWrapped.length) totalH += MIST_TITLE_FONT + 8 + vitalsWrapped.length * MIST_LH + GAP;
-  if (marchWrapped.length) totalH += MIST_TITLE_FONT + 8 + marchWrapped.length * MIST_LH + GAP;
-  if (mistWrapped.length) totalH += MIST_TITLE_FONT + 8 + mistWrapped.length * MIST_LH + GAP;
-  if (tagWrapped.length) totalH += MIST_TITLE_FONT + 8 + tagWrapped.length * MIST_LH + GAP;
+  if (marchWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + marchWrapped.length * MIST_LH + GAP;
+  if (mistWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + mistWrapped.length * MIST_LH + GAP;
+  if (vitalsWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + vitalsWrapped.length * MIST_LH + GAP;
+  if (tagWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + tagWrapped.length * MIST_LH + GAP;
   totalH += PADDING + 12; // bottom padding + margin
 
   // Ensure minimum height
