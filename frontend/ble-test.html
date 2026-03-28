@@ -92,7 +92,10 @@
   <!-- Step 1: Connect -->
   <div class="card">
     <h2>Step 1 — 連線 QIU-C15</h2>
-    <button class="btn btn-primary" id="btnConnect" onclick="connectPrinter()">搜尋並連線印表機</button>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <button class="btn btn-primary" style="flex:1" onclick="connectPrinter('name')">以名稱搜尋 QIU</button>
+      <button class="btn btn-primary" style="flex:1;background:#8e44ad;" onclick="connectPrinter('all')">顯示所有裝置</button>
+    </div>
     <div class="status" id="statusConnect" style="margin-top:10px;"></div>
   </div>
 
@@ -139,16 +142,29 @@ function setStatus(id, text, cls = '') {
 }
 
 // ── Step 1: Connect ──
-async function connectPrinter() {
+async function connectPrinter(mode = 'all') {
   try {
-    log('正在搜尋 BLE 裝置...', 'info');
+    log(`正在搜尋 BLE 裝置 (模式: ${mode})...`, 'info');
     setStatus('statusConnect', '搜尋中...');
 
-    // Request device with the printer service
-    bleDevice = await navigator.bluetooth.requestDevice({
-      filters: [{ services: [PRINTER_SERVICE_UUID] }],
-      optionalServices: []
-    });
+    let requestOptions;
+    if (mode === 'name') {
+      // 用名稱前綴過濾，同時把 printer service 放在 optionalServices
+      requestOptions = {
+        filters: [{ namePrefix: 'QIU' }],
+        optionalServices: [PRINTER_SERVICE_UUID]
+      };
+      log('使用 namePrefix "QIU" 過濾', 'info');
+    } else {
+      // 顯示所有 BLE 裝置，方便除錯
+      requestOptions = {
+        acceptAllDevices: true,
+        optionalServices: [PRINTER_SERVICE_UUID]
+      };
+      log('顯示所有 BLE 裝置（acceptAllDevices）', 'info');
+    }
+
+    bleDevice = await navigator.bluetooth.requestDevice(requestOptions);
 
     log(`找到裝置: ${bleDevice.name || bleDevice.id}`, 'ok');
 
