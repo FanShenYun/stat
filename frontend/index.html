@@ -809,10 +809,10 @@ async function connectPrinter() {
 
 // 黑白熱感應標籤 — 用圖案區分級別
 const LEVEL_LABEL_MAP = {
-  red:    { text: '緊急 IMMEDIATE', style: 'inverted' },    // 全黑底反白字
-  yellow: { text: '優先 DELAYED',   style: 'thick-border' }, // 粗黑框
-  green:  { text: '一般 MINOR',     style: 'thin-border' },  // 細框
-  black:  { text: '期待 EXPECTANT', style: 'cross' },        // 全黑底反白 + 交叉線
+  red:    { text: '紅 緊急 IMMEDIATE', style: 'inverted' },    // 全黑底反白字
+  yellow: { text: '黃 優先 DELAYED',   style: 'thick-border' }, // 粗黑框
+  green:  { text: '綠 一般 MINOR',     style: 'thin-border' },  // 細框
+  black:  { text: '黑 期待 EXPECTANT', style: 'cross' },        // 全黑底反白 + 交叉線
 };
 
 function renderTriageLabel(data) {
