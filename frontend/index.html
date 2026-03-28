@@ -422,9 +422,12 @@ const LEVEL_MAP = {
   red:     { emoji: '\u{1F534}', label: '緊急 - IMMEDIATE', color: 'red' },
   yellow:  { emoji: '\u{1F7E1}', label: '優先 - DELAYED',   color: 'yellow' },
   green:   { emoji: '\u{1F7E2}', label: '一般 - MINOR',        color: 'green' },
-  black:   { emoji: '\u26AB',    label: '期待 - EXPECTANT',     color: 'black' },
+  black:   { emoji: '\u26AB',    label: '不治 - EXPECTANT',     color: 'black' },
   unknown: { emoji: '\u26A0\uFE0F', label: '無法判讀',          color: 'unknown' },
 };
+
+const TRAUMA_MAP = {A:'開放性顱骨骨折',B:'顱底骨折',C:'顏面/呼吸道灼傷',D:'張力性氣胸',E:'氣胸/氣血胸',F:'開放性氣胸',G:'腹腔內出血',H:'大血管損傷',I:'雙側股骨骨折',J:'脫皮性損傷',K:'壓砸傷症候群',L:'骨盆骨折',M:'內臟外露',N:'燒燙傷',O:'OHCA',P:'斷肢'};
+const MECH_MAP = {1:'爆炸',2:'槍傷',3:'銳物穿刺',4:'交通意外',5:'墜落',6:'化生放核毒',7:'生物襲咬',8:'氣壓傷',9:'高體溫/熱傷害',10:'低體溫/失溫',11:'溺水',12:'電擊傷'};
 
 // ── Screen management ──
 function showScreen(id) {
@@ -522,6 +525,23 @@ function renderField(label, value) {
   return `<div class="result-field"><span class="field-label">${label}：</span>${value}</div>`;
 }
 
+const AIRWAY_STATUS_MAP = {
+  open_stable: '暢通穩定',
+  open_at_risk: '暢通但有風險',
+  partial_obstruction: '部分阻塞',
+  obstructed: '完全阻塞',
+};
+
+function formatAirway(airway) {
+  if (!airway) return null;
+  // 相容舊格式（字串）
+  if (typeof airway === 'string') return airway;
+  const parts = [];
+  if (airway.status) parts.push(AIRWAY_STATUS_MAP[airway.status] || airway.status);
+  if (airway.description) parts.push(airway.description);
+  return parts.length ? parts.join(' — ') : null;
+}
+
 // ── Show result ──
 function showResult(data) {
   const info = LEVEL_MAP[data.triage_level] || LEVEL_MAP.unknown;
@@ -562,7 +582,7 @@ function showResult(data) {
     const mc = data.march;
     const fields = [
       ['M 大出血', mc.m_hemorrhage],
-      ['A 呼吸道', mc.a_airway],
+      ['A 呼吸道', formatAirway(mc.a_airway)],
       ['R 呼吸', mc.r_respiration],
       ['C 循環', mc.c_circulation],
       ['H 低體溫', mc.h_hypothermia],
@@ -596,8 +616,6 @@ function showResult(data) {
 
   // Tags section (trauma codes, mechanism, special population)
   const tagsEl = document.getElementById('sectionTags');
-  const TRAUMA_MAP = {A:'開放性顱骨骨折',B:'顱底骨折',C:'顏面/呼吸道灼傷',D:'張力性氣胸',E:'氣胸/氣血胸',F:'開放性氣胸',G:'腹腔內出血',H:'大血管損傷',I:'雙側股骨骨折',J:'脫皮性損傷',K:'壓砸傷症候群',L:'骨盆骨折',M:'內臟外露',N:'燒燙傷',O:'OHCA',P:'斷肢'};
-  const MECH_MAP = {1:'爆炸',2:'槍傷',3:'銳物穿刺',4:'交通意外',5:'墜落',6:'化生放核毒',7:'生物襲咬',8:'氣壓傷',9:'高體溫/熱傷害',10:'低體溫/失溫',11:'溺水',12:'電擊傷'};
   let tagHtml = '';
   const tc = data.trauma_codes || [];
   const mc2 = data.mechanism_codes || [];
@@ -812,7 +830,7 @@ const LEVEL_LABEL_MAP = {
   red:    { text: '紅 緊急 IMMEDIATE', style: 'inverted' },    // 全黑底反白字
   yellow: { text: '黃 優先 DELAYED',   style: 'thick-border' }, // 粗黑框
   green:  { text: '綠 一般 MINOR',     style: 'thin-border' },  // 細框
-  black:  { text: '黑 期待 EXPECTANT', style: 'cross' },        // 全黑底反白 + 交叉線
+  black:  { text: '黑 不治 EXPECTANT', style: 'cross' },        // 全黑底反白 + 交叉線
 };
 
 function renderTriageLabel(data) {
@@ -863,29 +881,53 @@ function renderTriageLabel(data) {
   if (data.march) {
     const mc = data.march;
     if (mc.m_hemorrhage)  marchLines.push('M大出血: ' + mc.m_hemorrhage);
-    if (mc.a_airway)      marchLines.push('A呼吸道: ' + mc.a_airway);
+    const aw = formatAirway(mc.a_airway);
+    if (aw) marchLines.push('A呼吸道: ' + aw);
     if (mc.r_respiration) marchLines.push('R呼吸: ' + mc.r_respiration);
     if (mc.c_circulation) marchLines.push('C循環: ' + mc.c_circulation);
     if (mc.h_hypothermia) marchLines.push('H低體溫: ' + mc.h_hypothermia);
   }
 
-  // Wrap actions for height calc
+  // Vitals
+  const vitalsLines = [];
+  if (data.vitals) {
+    const v = data.vitals;
+    const vPairs = [
+      ['意識', v.consciousness], ['GCS', v.gcs], ['HR', v.hr],
+      ['BP', v.bp], ['SpO2', v.spo2], ['Temp', v.temp], ['RR', v.rr],
+    ].filter(p => p[1] != null);
+    if (vPairs.length) {
+      vitalsLines.push(vPairs.map(p => `${p[0]}:${p[1]}`).join('  '));
+    }
+  }
+
+  // Tags (trauma codes, mechanism, special population)
+  const tagLines = [];
+  const tc = data.trauma_codes || [];
+  const mc2 = data.mechanism_codes || [];
+  const sp = data.special_population || [];
+  tc.forEach(c => tagLines.push(`${c} ${TRAUMA_MAP[c]||c}`));
+  mc2.forEach(c => tagLines.push(`${c} ${MECH_MAP[c]||c}`));
+  sp.forEach(s => tagLines.push(s));
+
+  // Wrap all for height calc
   ctx.font = `${ACTION_FONT}px ${font}`;
   const actionWrapped = actionLines.flatMap(a => wrapText(ctx, a, W - PADDING * 2));
 
-  // Wrap MIST for height calc
   ctx.font = `${MIST_FONT}px ${font}`;
-  const mistWrapped = mistLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
-
-  // Wrap MARCH for height calc
   const marchWrapped = marchLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
+  const mistWrapped = mistLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
+  const vitalsWrapped = vitalsLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
+  const tagWrapped = tagLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
 
   // Calculate total height
   let totalH = PADDING + HEADER_H + GAP + META_H + GAP;
   totalH += summaryLines.length * SUMMARY_LH + GAP;
   if (actionWrapped.length) totalH += actionWrapped.length * ACTION_LH + GAP;
+  if (vitalsWrapped.length) totalH += MIST_TITLE_FONT + 8 + vitalsWrapped.length * MIST_LH + GAP;
   if (marchWrapped.length) totalH += MIST_TITLE_FONT + 8 + marchWrapped.length * MIST_LH + GAP;
   if (mistWrapped.length) totalH += MIST_TITLE_FONT + 8 + mistWrapped.length * MIST_LH + GAP;
+  if (tagWrapped.length) totalH += MIST_TITLE_FONT + 8 + tagWrapped.length * MIST_LH + GAP;
   totalH += PADDING + 12; // bottom padding + margin
 
   // Ensure minimum height
@@ -1017,6 +1059,54 @@ function renderTriageLabel(data) {
     y += MIST_TITLE_FONT + 8;
     ctx.font = `${MIST_FONT}px ${font}`;
     for (const line of mistLines) {
+      const wrapped = wrapText(ctx, line, W - PADDING * 2);
+      for (const wl of wrapped) {
+        ctx.fillText(wl, PADDING, y);
+        y += MIST_LH;
+      }
+    }
+    y += GAP;
+  }
+
+  // ── 生命徵象 ──
+  if (vitalsLines.length) {
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(PADDING, y);
+    ctx.lineTo(W - PADDING, y);
+    ctx.stroke();
+    y += GAP;
+    ctx.font = `bold ${MIST_TITLE_FONT}px ${font}`;
+    ctx.fillStyle = '#000000';
+    ctx.fillText('生命徵象', PADDING, y);
+    y += MIST_TITLE_FONT + 8;
+    ctx.font = `${MIST_FONT}px ${font}`;
+    for (const line of vitalsLines) {
+      const wrapped = wrapText(ctx, line, W - PADDING * 2);
+      for (const wl of wrapped) {
+        ctx.fillText(wl, PADDING, y);
+        y += MIST_LH;
+      }
+    }
+    y += GAP;
+  }
+
+  // ── 分類標記 ──
+  if (tagLines.length) {
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(PADDING, y);
+    ctx.lineTo(W - PADDING, y);
+    ctx.stroke();
+    y += GAP;
+    ctx.font = `bold ${MIST_TITLE_FONT}px ${font}`;
+    ctx.fillStyle = '#000000';
+    ctx.fillText('分類標記', PADDING, y);
+    y += MIST_TITLE_FONT + 8;
+    ctx.font = `${MIST_FONT}px ${font}`;
+    for (const line of tagLines) {
       const wrapped = wrapText(ctx, line, W - PADDING * 2);
       for (const wl of wrapped) {
         ctx.fillText(wl, PADDING, y);
