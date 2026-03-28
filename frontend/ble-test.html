@@ -99,12 +99,44 @@
     <div class="status" id="statusConnect" style="margin-top:10px;"></div>
   </div>
 
-  <!-- Step 2: Send test data -->
+  <!-- Step 2: Protocol test -->
   <div class="card">
-    <h2>Step 2 — 測試寫入</h2>
-    <input type="text" id="inputText" value="Hello BLE Printer" placeholder="輸入測試文字">
-    <button class="btn btn-green" id="btnSend" onclick="sendTestData()" disabled>送出測試資料</button>
+    <h2>Step 2 — 測試列印（選擇協議）</h2>
+    <input type="text" id="inputText" value="Hello" placeholder="輸入測試文字">
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <button class="btn btn-green test-btn" onclick="sendTSPL()" disabled>TSPL（標籤印表機常用）</button>
+      <button class="btn btn-green test-btn" onclick="sendCPCL()" disabled>CPCL（另一種標籤協議）</button>
+      <button class="btn btn-green test-btn" onclick="sendESCPOS()" disabled>ESC/POS（收據印表機）</button>
+      <button class="btn test-btn" style="background:#e67e22;color:#fff;" onclick="queryStatus()" disabled>查詢印表機狀態</button>
+    </div>
     <div class="status" id="statusSend" style="margin-top:10px;"></div>
+  </div>
+
+  <!-- Step 3: Label settings -->
+  <div class="card">
+    <h2>標籤設定（TSPL/CPCL 用）</h2>
+    <div style="display:flex;gap:8px;margin-bottom:8px;">
+      <div style="flex:1">
+        <label style="font-size:12px;color:var(--text-muted);">寬度 mm</label>
+        <input type="text" id="labelWidth" value="40" style="margin-bottom:0;">
+      </div>
+      <div style="flex:1">
+        <label style="font-size:12px;color:var(--text-muted);">高度 mm</label>
+        <input type="text" id="labelHeight" value="30" style="margin-bottom:0;">
+      </div>
+      <div style="flex:1">
+        <label style="font-size:12px;color:var(--text-muted);">間距 mm</label>
+        <input type="text" id="labelGap" value="2" style="margin-bottom:0;">
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;">
+      <label style="font-size:13px;display:flex;align-items:center;gap:4px;">
+        <input type="radio" name="orientation" value="0" checked> 直向
+      </label>
+      <label style="font-size:13px;display:flex;align-items:center;gap:4px;">
+        <input type="radio" name="orientation" value="1"> 橫向
+      </label>
+    </div>
   </div>
 
   <!-- Log -->
@@ -172,7 +204,7 @@ async function connectPrinter(mode = 'all') {
     bleDevice.addEventListener('gattserverdisconnected', () => {
       log('裝置已斷線', 'err');
       setStatus('statusConnect', '已斷線', 'error');
-      document.getElementById('btnSend').disabled = true;
+      document.querySelectorAll('.test-btn').forEach(b => b.disabled = true);
       writeChar = null;
       notifyChar = null;
     });
@@ -210,8 +242,8 @@ async function connectPrinter(mode = 'all') {
     }
 
     setStatus('statusConnect', `已連線: ${bleDevice.name || bleDevice.id}`, 'connected');
-    document.getElementById('btnSend').disabled = false;
-    log('連線完成，可以開始測試寫入', 'ok');
+    document.querySelectorAll('.test-btn').forEach(b => b.disabled = false);
+    log('連線完成，可以開始測試列印', 'ok');
 
   } catch (e) {
     log(`連線失敗: ${e.message}`, 'err');
@@ -219,54 +251,129 @@ async function connectPrinter(mode = 'all') {
   }
 }
 
-// ── Step 2: Send test data ──
-async function sendTestData() {
+// ── BLE Send Helper ──
+async function bleSend(payload, label) {
   if (!writeChar) {
     log('尚未連線', 'err');
-    return;
+    return false;
   }
-
-  const text = document.getElementById('inputText').value;
-  if (!text) {
-    log('請輸入測試文字', 'err');
-    return;
-  }
-
   try {
-    // ESC/POS: Initialize printer
-    const ESC = 0x1B;
-    const GS = 0x1D;
-    const LF = 0x0A;
-
-    // Build ESC/POS command sequence
-    const initCmd = new Uint8Array([ESC, 0x40]);          // ESC @ — Initialize
-    const textBytes = new TextEncoder().encode(text);      // UTF-8 text
-    const feedCut = new Uint8Array([LF, LF, LF, GS, 0x56, 0x00]); // Feed + GS V 0 — Full cut
-
-    // Combine all into one buffer
-    const payload = new Uint8Array([
-      ...initCmd,
-      ...textBytes,
-      ...feedCut
-    ]);
-
-    log(`送出 ${payload.length} bytes...`, 'info');
+    log(`[${label}] 送出 ${payload.length} bytes...`, 'info');
     log(`Hex: ${Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(' ')}`, 'info');
+    log(`ASCII: ${new TextDecoder('ascii', {fatal: false}).decode(payload)}`, 'info');
 
-    // BLE MTU is typically 20 bytes, send in chunks
     const MTU = 20;
     for (let i = 0; i < payload.length; i += MTU) {
       const chunk = payload.slice(i, i + MTU);
       await writeChar.writeValueWithoutResponse(chunk);
-      log(`  chunk ${Math.floor(i / MTU) + 1}: ${chunk.length} bytes sent`, 'ok');
+      // Small delay between chunks to avoid BLE congestion
+      await new Promise(r => setTimeout(r, 20));
     }
-
-    log('資料送出完成！檢查印表機是否有反應', 'ok');
-    setStatus('statusSend', '送出成功', 'connected');
-
+    log(`[${label}] 送出完成`, 'ok');
+    setStatus('statusSend', `${label} 送出成功`, 'connected');
+    return true;
   } catch (e) {
-    log(`送出失敗: ${e.message}`, 'err');
+    log(`[${label}] 送出失敗: ${e.message}`, 'err');
     setStatus('statusSend', `送出失敗: ${e.message}`, 'error');
+    return false;
+  }
+}
+
+function strToBytes(str) {
+  return new TextEncoder().encode(str);
+}
+
+function getLabel() {
+  return {
+    width: document.getElementById('labelWidth').value || '40',
+    height: document.getElementById('labelHeight').value || '30',
+    gap: document.getElementById('labelGap').value || '2',
+    orientation: document.querySelector('input[name="orientation"]:checked').value
+  };
+}
+
+// ── TSPL Protocol ──
+async function sendTSPL() {
+  const text = document.getElementById('inputText').value || 'Test';
+  const lb = getLabel();
+
+  log('=== TSPL 測試 ===', 'info');
+
+  // TSPL commands are ASCII text terminated with \r\n
+  const cmd = [
+    `SIZE ${lb.width} mm,${lb.height} mm`,
+    `GAP ${lb.gap} mm,0`,
+    `DIRECTION ${lb.orientation}`,
+    `CLS`,
+    `TEXT 10,10,"TSS24.BF2",0,1,1,"${text}"`,
+    `PRINT 1,1`,
+    ``
+  ].join('\r\n');
+
+  log(`TSPL 指令:\n${cmd}`, 'info');
+  await bleSend(strToBytes(cmd), 'TSPL');
+}
+
+// ── CPCL Protocol ──
+async function sendCPCL() {
+  const text = document.getElementById('inputText').value || 'Test';
+  const lb = getLabel();
+
+  log('=== CPCL 測試 ===', 'info');
+
+  // Convert mm to dots (203 DPI: 1mm ≈ 8 dots)
+  const heightDots = Math.round(parseFloat(lb.height) * 8);
+
+  const cmd = [
+    `! 0 200 200 ${heightDots} 1`,
+    lb.orientation === '1' ? 'PAGE-WIDTH 240' : '',
+    `TEXT 4 0 10 10 ${text}`,
+    `PRINT`,
+    ``
+  ].filter(Boolean).join('\r\n');
+
+  log(`CPCL 指令:\n${cmd}`, 'info');
+  await bleSend(strToBytes(cmd), 'CPCL');
+}
+
+// ── ESC/POS Protocol ──
+async function sendESCPOS() {
+  const text = document.getElementById('inputText').value || 'Test';
+
+  log('=== ESC/POS 測試 ===', 'info');
+
+  const ESC = 0x1B;
+  const GS = 0x1D;
+  const LF = 0x0A;
+
+  const initCmd = new Uint8Array([ESC, 0x40]);                     // ESC @ — Initialize
+  const textBytes = strToBytes(text + '\n');
+  const feedCut = new Uint8Array([LF, LF, LF, GS, 0x56, 0x00]);   // Feed + Full cut
+
+  const payload = new Uint8Array([...initCmd, ...textBytes, ...feedCut]);
+  await bleSend(payload, 'ESC/POS');
+}
+
+// ── Query printer status ──
+async function queryStatus() {
+  log('=== 查詢印表機狀態 ===', 'info');
+
+  // Try multiple status query methods
+  // 1) ESC/POS: DLE EOT (real-time status)
+  log('嘗試 ESC/POS DLE EOT 狀態查詢...', 'info');
+  await bleSend(new Uint8Array([0x10, 0x04, 0x01]), 'DLE EOT');
+  await new Promise(r => setTimeout(r, 500));
+
+  // 2) TSPL: send empty line to see if printer echoes error
+  log('嘗試 TSPL 空指令...', 'info');
+  await bleSend(strToBytes('\r\n'), 'TSPL-ping');
+  await new Promise(r => setTimeout(r, 500));
+
+  // 3) Try reading a characteristic if available
+  if (notifyChar) {
+    log('Notify characteristic 已啟用，檢查上方是否有印表機回應', 'info');
+  } else {
+    log('Notify characteristic 未啟用，無法接收回應', 'err');
   }
 }
 
