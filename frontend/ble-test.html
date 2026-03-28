@@ -125,6 +125,7 @@
       <button class="btn test-btn" style="background:#9b59b6;color:#fff;" onclick="sendRawText()" disabled>5. 純文字（無協議）</button>
       <button class="btn test-btn" style="background:#e74c3c;color:#fff;" onclick="sendBitmapTest()" disabled>6. 點陣圖測試（私有協議）</button>
       <button class="btn test-btn" style="background:#1abc9c;color:#fff;" onclick="probeAllChars()" disabled>7. 掃描所有 Characteristics</button>
+      <button class="btn test-btn" style="background:#2c3e50;color:#fff;" onclick="dualChannelProbe()" disabled>8. 雙通道探測（AE01→AE02 vs AE03→AE04）</button>
     </div>
     <div class="status" id="statusSend" style="margin-top:10px;"></div>
   </div>
@@ -204,14 +205,14 @@ async function connectPrinter(mode = 'all') {
       // 用名稱前綴過濾，同時把 printer service 放在 optionalServices
       requestOptions = {
         filters: [{ namePrefix: 'QIU' }],
-        optionalServices: [PRINTER_SERVICE_UUID]
+        optionalServices: [PRINTER_SERVICE_UUID, 0xAE3A]
       };
       log('使用 namePrefix "QIU" 過濾', 'info');
     } else {
       // 顯示所有 BLE 裝置，方便除錯
       requestOptions = {
         acceptAllDevices: true,
-        optionalServices: [PRINTER_SERVICE_UUID]
+        optionalServices: [PRINTER_SERVICE_UUID, 0xAE3A]
       };
       log('顯示所有 BLE 裝置（acceptAllDevices）', 'info');
     }
@@ -592,6 +593,58 @@ async function probeAllChars() {
   }
 
   log('\n掃描完成', 'ok');
+}
+
+// ── Dual channel probe ──
+async function dualChannelProbe() {
+  if (!writeChar || !writeChar2) {
+    log('需要 AE01 和 AE03 都可用', 'err');
+    return;
+  }
+
+  log('=== 雙通道探測 ===', 'info');
+  log('測試哪個通道是指令、哪個是資料', 'info');
+
+  // Common probe sequences for Chinese label printers
+  const probes = [
+    { name: '空指令',       data: [0x00] },
+    { name: 'ESC @',        data: [0x1B, 0x40] },
+    { name: 'DLE EOT 1',    data: [0x10, 0x04, 0x01] },
+    { name: 'DLE EOT 2',    data: [0x10, 0x04, 0x02] },
+    { name: 'GS I 1',       data: [0x1D, 0x49, 0x01] },  // Printer ID
+    { name: 'GS I 2',       data: [0x1D, 0x49, 0x02] },  // Printer ID
+    { name: 'GS I 3',       data: [0x1D, 0x49, 0x03] },  // Printer ID
+    { name: 'DC2 T',        data: [0x12, 0x54] },          // Self-test
+    { name: '0x1F probe',   data: [0x1F, 0xF1] },          // Some printers
+    { name: 'header 55AA',  data: [0x55, 0xAA, 0x00, 0x00, 0x00] },  // Common Chinese header
+    { name: 'header 03',    data: [0x03, 0x00, 0x00, 0x00] },
+  ];
+
+  // Test on AE01 → watch AE02
+  log('\n── 透過 0xAE01 送出，觀察 0xAE02 回應 ──', 'info');
+  for (const p of probes) {
+    log(`  送出 ${p.name}: [${p.data.map(b => b.toString(16).padStart(2, '0')).join(' ')}]`, 'info');
+    try {
+      await writeChar.writeValueWithoutResponse(new Uint8Array(p.data));
+    } catch (e) {
+      log(`    失敗: ${e.message}`, 'err');
+    }
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  log('\n── 透過 0xAE03 送出，觀察 0xAE04 回應 ──', 'info');
+  for (const p of probes) {
+    log(`  送出 ${p.name}: [${p.data.map(b => b.toString(16).padStart(2, '0')).join(' ')}]`, 'info');
+    try {
+      await writeChar2.writeValueWithoutResponse(new Uint8Array(p.data));
+    } catch (e) {
+      log(`    失敗: ${e.message}`, 'err');
+    }
+    await new Promise(r => setTimeout(r, 300));
+  }
+
+  log('\n探測完成，檢查上方是否有 [0xAE02] 或 [0xAE04] 的回應', 'ok');
+  log('有回應的通道就是指令通道', 'info');
 }
 
 // ── Helpers ──
