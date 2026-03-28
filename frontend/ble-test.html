@@ -99,22 +99,39 @@
     <div class="status" id="statusConnect" style="margin-top:10px;"></div>
   </div>
 
-  <!-- Step 2: Protocol test -->
+  <!-- Step 2: Characteristic selection -->
   <div class="card">
-    <h2>Step 2 — 測試列印（選擇協議）</h2>
+    <h2>Step 2 — 選擇寫入 Characteristic</h2>
+    <div style="display:flex;gap:8px;">
+      <label style="font-size:13px;display:flex;align-items:center;gap:4px;">
+        <input type="radio" name="charSelect" value="AE01" checked> 0xAE01 (WriteNoResp)
+      </label>
+      <label style="font-size:13px;display:flex;align-items:center;gap:4px;">
+        <input type="radio" name="charSelect" value="AE03"> 0xAE03 (Write)
+      </label>
+    </div>
+    <div class="status" id="statusChar" style="margin-top:6px;font-size:12px;"></div>
+  </div>
+
+  <!-- Step 3: Protocol test -->
+  <div class="card">
+    <h2>Step 3 — 測試列印</h2>
     <input type="text" id="inputText" value="Hello" placeholder="輸入測試文字">
     <div style="display:flex;flex-direction:column;gap:8px;">
-      <button class="btn btn-green test-btn" onclick="sendTSPL()" disabled>TSPL（標籤印表機常用）</button>
-      <button class="btn btn-green test-btn" onclick="sendCPCL()" disabled>CPCL（另一種標籤協議）</button>
-      <button class="btn btn-green test-btn" onclick="sendESCPOS()" disabled>ESC/POS（收據印表機）</button>
-      <button class="btn test-btn" style="background:#e67e22;color:#fff;" onclick="queryStatus()" disabled>查詢印表機狀態</button>
+      <button class="btn test-btn" style="background:#e67e22;color:#fff;" onclick="queryStatus()" disabled>1. 查詢印表機狀態</button>
+      <button class="btn btn-green test-btn" onclick="sendTSPL()" disabled>2. TSPL</button>
+      <button class="btn btn-green test-btn" onclick="sendCPCL()" disabled>3. CPCL</button>
+      <button class="btn btn-green test-btn" onclick="sendESCPOS()" disabled>4. ESC/POS</button>
+      <button class="btn test-btn" style="background:#9b59b6;color:#fff;" onclick="sendRawText()" disabled>5. 純文字（無協議）</button>
+      <button class="btn test-btn" style="background:#e74c3c;color:#fff;" onclick="sendBitmapTest()" disabled>6. 點陣圖測試（私有協議）</button>
+      <button class="btn test-btn" style="background:#1abc9c;color:#fff;" onclick="probeAllChars()" disabled>7. 掃描所有 Characteristics</button>
     </div>
     <div class="status" id="statusSend" style="margin-top:10px;"></div>
   </div>
 
-  <!-- Step 3: Label settings -->
+  <!-- Label settings -->
   <div class="card">
-    <h2>標籤設定（TSPL/CPCL 用）</h2>
+    <h2>標籤設定</h2>
     <div style="display:flex;gap:8px;margin-bottom:8px;">
       <div style="flex:1">
         <label style="font-size:12px;color:var(--text-muted);">寬度 mm</label>
@@ -150,11 +167,14 @@
 // ── BLE UUIDs (from nRF Connect scan) ──
 const PRINTER_SERVICE_UUID    = 0xAE30;
 const PRINTER_WRITE_CHAR_UUID = 0xAE01;
+const PRINTER_WRITE2_CHAR_UUID = 0xAE03;
 const PRINTER_NOTIFY_CHAR_UUID = 0xAE02;
 
 let bleDevice = null;
 let bleServer = null;
-let writeChar = null;
+let bleService = null;
+let writeChar = null;    // 0xAE01 WriteNoResp
+let writeChar2 = null;   // 0xAE03 Write (with response)
 let notifyChar = null;
 
 const logArea = document.getElementById('logArea');
@@ -216,29 +236,77 @@ async function connectPrinter(mode = 'all') {
 
     // Get service
     log(`正在取得 Service 0x${PRINTER_SERVICE_UUID.toString(16).toUpperCase()}...`, 'info');
-    const service = await bleServer.getPrimaryService(PRINTER_SERVICE_UUID);
+    bleService = await bleServer.getPrimaryService(PRINTER_SERVICE_UUID);
     log('Service 取得成功', 'ok');
 
-    // Get write characteristic
-    log(`正在取得 Write Characteristic 0x${PRINTER_WRITE_CHAR_UUID.toString(16).toUpperCase()}...`, 'info');
-    writeChar = await service.getCharacteristic(PRINTER_WRITE_CHAR_UUID);
-    log(`Write Characteristic 取得成功 (properties: ${formatProperties(writeChar.properties)})`, 'ok');
+    // Get ALL characteristics and log them
+    const allChars = await bleService.getCharacteristics();
+    log(`發現 ${allChars.length} 個 Characteristics:`, 'info');
+    for (const c of allChars) {
+      const uuid = c.uuid;
+      const short = uuid.startsWith('0000') ? '0x' + uuid.substring(4, 8).toUpperCase() : uuid;
+      log(`  ${short}: ${formatProperties(c.properties)}`, 'info');
+    }
 
-    // Get notify characteristic
+    // Get write characteristic 0xAE01
+    writeChar = await bleService.getCharacteristic(PRINTER_WRITE_CHAR_UUID);
+    log(`0xAE01 取得成功 (${formatProperties(writeChar.properties)})`, 'ok');
+
+    // Get write characteristic 0xAE03
     try {
-      notifyChar = await service.getCharacteristic(PRINTER_NOTIFY_CHAR_UUID);
-      log(`Notify Characteristic 取得成功`, 'ok');
-
-      await notifyChar.startNotifications();
-      notifyChar.addEventListener('characteristicvaluechanged', (event) => {
-        const value = event.target.value;
-        const bytes = new Uint8Array(value.buffer);
-        const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
-        log(`印表機回應: [${hex}]`, 'info');
-      });
-      log('已啟用 Notify 監聽', 'ok');
+      writeChar2 = await bleService.getCharacteristic(PRINTER_WRITE2_CHAR_UUID);
+      log(`0xAE03 取得成功 (${formatProperties(writeChar2.properties)})`, 'ok');
     } catch (e) {
-      log(`Notify 設定失敗 (非致命): ${e.message}`, 'err');
+      log(`0xAE03 取得失敗: ${e.message}`, 'err');
+    }
+
+    // Get notify characteristics (0xAE02 and 0xAE04)
+    const notifyHandler = (charName) => (event) => {
+      const value = event.target.value;
+      const bytes = new Uint8Array(value.buffer);
+      const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      const ascii = new TextDecoder('ascii', {fatal: false}).decode(bytes);
+      log(`[${charName}] 印表機回應: [${hex}] ASCII: "${ascii}"`, 'info');
+    };
+
+    try {
+      notifyChar = await bleService.getCharacteristic(PRINTER_NOTIFY_CHAR_UUID);
+      await notifyChar.startNotifications();
+      notifyChar.addEventListener('characteristicvaluechanged', notifyHandler('0xAE02'));
+      log('0xAE02 Notify 已啟用', 'ok');
+    } catch (e) {
+      log(`0xAE02 Notify 失敗: ${e.message}`, 'err');
+    }
+
+    // Also try 0xAE04 notify
+    try {
+      const notify2 = await bleService.getCharacteristic(0xAE04);
+      await notify2.startNotifications();
+      notify2.addEventListener('characteristicvaluechanged', notifyHandler('0xAE04'));
+      log('0xAE04 Notify 已啟用', 'ok');
+    } catch (e) {
+      log(`0xAE04 Notify 失敗 (非致命): ${e.message}`, 'err');
+    }
+
+    // Try 0xAE05 indicate
+    try {
+      const indicate = await bleService.getCharacteristic(0xAE05);
+      await indicate.startNotifications();
+      indicate.addEventListener('characteristicvaluechanged', notifyHandler('0xAE05'));
+      log('0xAE05 Indicate 已啟用', 'ok');
+    } catch (e) {
+      log(`0xAE05 Indicate 失敗 (非致命): ${e.message}`, 'err');
+    }
+
+    // Try reading 0xAE10
+    try {
+      const readChar = await bleService.getCharacteristic(0xAE10);
+      const val = await readChar.readValue();
+      const bytes = new Uint8Array(val.buffer);
+      const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+      log(`0xAE10 讀取值: [${hex}]`, 'info');
+    } catch (e) {
+      log(`0xAE10 讀取失敗: ${e.message}`, 'err');
     }
 
     setStatus('statusConnect', `已連線: ${bleDevice.name || bleDevice.id}`, 'connected');
@@ -252,25 +320,43 @@ async function connectPrinter(mode = 'all') {
 }
 
 // ── BLE Send Helper ──
+function getActiveWriteChar() {
+  const sel = document.querySelector('input[name="charSelect"]:checked').value;
+  if (sel === 'AE03') {
+    if (!writeChar2) { log('0xAE03 不可用，fallback 到 0xAE01', 'err'); return writeChar; }
+    return writeChar2;
+  }
+  return writeChar;
+}
+
 async function bleSend(payload, label) {
-  if (!writeChar) {
+  const wc = getActiveWriteChar();
+  if (!wc) {
     log('尚未連線', 'err');
     return false;
   }
+  const charSel = document.querySelector('input[name="charSelect"]:checked').value;
+  const useResponse = (charSel === 'AE03' && writeChar2);
+
   try {
-    log(`[${label}] 送出 ${payload.length} bytes...`, 'info');
-    log(`Hex: ${Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(' ')}`, 'info');
-    log(`ASCII: ${new TextDecoder('ascii', {fatal: false}).decode(payload)}`, 'info');
+    log(`[${label}] → 0x${charSel} | ${payload.length} bytes`, 'info');
+    // Only show hex for small payloads
+    if (payload.length <= 100) {
+      log(`Hex: ${Array.from(payload).map(b => b.toString(16).padStart(2, '0')).join(' ')}`, 'info');
+    }
 
     const MTU = 20;
     for (let i = 0; i < payload.length; i += MTU) {
       const chunk = payload.slice(i, i + MTU);
-      await writeChar.writeValueWithoutResponse(chunk);
-      // Small delay between chunks to avoid BLE congestion
+      if (useResponse) {
+        await wc.writeValueWithResponse(chunk);
+      } else {
+        await wc.writeValueWithoutResponse(chunk);
+      }
       await new Promise(r => setTimeout(r, 20));
     }
     log(`[${label}] 送出完成`, 'ok');
-    setStatus('statusSend', `${label} 送出成功`, 'connected');
+    setStatus('statusSend', `${label} 送出成功 (0x${charSel})`, 'connected');
     return true;
   } catch (e) {
     log(`[${label}] 送出失敗: ${e.message}`, 'err');
@@ -375,6 +461,137 @@ async function queryStatus() {
   } else {
     log('Notify characteristic 未啟用，無法接收回應', 'err');
   }
+}
+
+// ── Raw text (no protocol framing) ──
+async function sendRawText() {
+  const text = document.getElementById('inputText').value || 'Test';
+  log('=== 純文字測試（無協議包裝）===', 'info');
+  // Just send the text + newline, no ESC/POS or TSPL framing
+  await bleSend(strToBytes(text + '\r\n'), 'RawText');
+}
+
+// ── Bitmap test (common proprietary label printer protocol) ──
+async function sendBitmapTest() {
+  log('=== 點陣圖測試 ===', 'info');
+  log('嘗試多種常見的私有協議初始化序列...', 'info');
+
+  // Many Chinese label printers use ESC/POS bitmap commands
+  // ESC * — Select bit-image mode
+  // or GS v 0 — Print raster bit image
+
+  // Method 1: GS v 0 (raster bit image) — 8 pixel wide, 8 pixel tall black bar
+  log('方法 1: ESC/POS GS v 0 (點陣圖列印)...', 'info');
+  {
+    const width = 48; // bytes = 384 dots (common 58mm printer)
+    const height = 16; // 16 rows
+    const GS = 0x1D;
+    const header = new Uint8Array([
+      0x1B, 0x40,                                       // ESC @ init
+      GS, 0x76, 0x30, 0x00,                             // GS v 0 m
+      width & 0xFF, (width >> 8) & 0xFF,                 // xL xH
+      height & 0xFF, (height >> 8) & 0xFF                // yL yH
+    ]);
+    // Create a simple pattern: alternating black/white lines
+    const imgData = new Uint8Array(width * height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        imgData[y * width + x] = (y % 2 === 0) ? 0xFF : 0x00;
+      }
+    }
+    const payload = new Uint8Array([...header, ...imgData]);
+    await bleSend(payload, 'GS-v-0-bitmap');
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  // Method 2: Common Chinese label printer init handshake
+  log('方法 2: 常見私有協議握手序列...', 'info');
+  {
+    // Some printers need a specific wake-up / handshake
+    const sequences = [
+      { name: 'wake-1', data: [0x00] },
+      { name: 'wake-2', data: [0x1B, 0x40] },              // ESC @
+      { name: 'wake-3', data: [0x1F, 0x11, 0x02] },        // Some printers use 0x1F prefix
+      { name: 'wake-4', data: [0x1B, 0x61, 0x01] },        // ESC a 1 — center align
+      { name: 'self-test', data: [0x12, 0x54] },            // DC2 T — self-test print
+      { name: 'feed', data: [0x0A, 0x0A, 0x0A] },          // LF x3
+    ];
+    for (const seq of sequences) {
+      log(`  嘗試 ${seq.name}: [${seq.data.map(b => b.toString(16).padStart(2, '0')).join(' ')}]`, 'info');
+      await bleSend(new Uint8Array(seq.data), seq.name);
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  log('點陣圖測試完成，觀察印表機是否有任何反應（亮燈、走紙、聲音）', 'info');
+}
+
+// ── Probe all characteristics ──
+async function probeAllChars() {
+  if (!bleService) { log('尚未連線', 'err'); return; }
+
+  log('=== 掃描所有 Characteristics ===', 'info');
+
+  const allChars = await bleService.getCharacteristics();
+  for (const c of allChars) {
+    const uuid = c.uuid;
+    const short = uuid.startsWith('0000') ? '0x' + uuid.substring(4, 8).toUpperCase() : uuid;
+    const props = c.properties;
+
+    log(`\n── ${short} ──`, 'info');
+    log(`  Properties: ${formatProperties(props)}`, 'info');
+
+    // Try reading
+    if (props.read) {
+      try {
+        const val = await c.readValue();
+        const bytes = new Uint8Array(val.buffer);
+        const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+        const ascii = new TextDecoder('ascii', {fatal: false}).decode(bytes);
+        log(`  Read value: [${hex}]`, 'ok');
+        log(`  ASCII: "${ascii}"`, 'ok');
+      } catch (e) {
+        log(`  Read failed: ${e.message}`, 'err');
+      }
+    }
+
+    // Try getting descriptors
+    try {
+      const descs = await c.getDescriptors();
+      for (const d of descs) {
+        try {
+          const val = await d.readValue();
+          const bytes = new Uint8Array(val.buffer);
+          const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+          log(`  Descriptor ${d.uuid}: [${hex}]`, 'info');
+        } catch (e) { /* skip */ }
+      }
+    } catch (e) { /* no descriptors */ }
+  }
+
+  // Also check if there's a second service (0xAE3A)
+  try {
+    const svc2 = await bleServer.getPrimaryService(0xAE3A);
+    log('\n=== Service 0xAE3A (韌體/設定) ===', 'info');
+    const chars2 = await svc2.getCharacteristics();
+    for (const c of chars2) {
+      const uuid = c.uuid;
+      const short = uuid.startsWith('0000') ? '0x' + uuid.substring(4, 8).toUpperCase() : uuid;
+      log(`  ${short}: ${formatProperties(c.properties)}`, 'info');
+      if (c.properties.read) {
+        try {
+          const val = await c.readValue();
+          const bytes = new Uint8Array(val.buffer);
+          const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+          log(`    Read: [${hex}]`, 'ok');
+        } catch (e) { /* skip */ }
+      }
+    }
+  } catch (e) {
+    log(`Service 0xAE3A 不可用: ${e.message}`, 'err');
+  }
+
+  log('\n掃描完成', 'ok');
 }
 
 // ── Helpers ──
