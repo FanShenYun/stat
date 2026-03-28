@@ -155,7 +155,7 @@ def triage(transcript: str) -> list[dict]:
 
     response = client.models.generate_content(
         model="gemini-2.5-flash",
-        contents=TRIAGE_PROMPT.format(transcript=transcript),
+        contents=TRIAGE_PROMPT.replace("{transcript}", transcript),
     )
 
     raw_text = response.text.strip()
