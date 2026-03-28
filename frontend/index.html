@@ -106,7 +106,6 @@
     gap: 6px;
     transition: all 0.2s;
     -webkit-tap-highlight-color: transparent;
-    touch-action: none;
   }
   .record-btn .mic { font-size: 40px; }
   .record-btn:active, .record-btn.recording {
@@ -228,17 +227,6 @@
   .report-hint .hint-detail {
     color: var(--text-muted);
   }
-  .hint-toggle {
-    background: none;
-    border: 1px solid #ffffff20;
-    border-radius: 8px;
-    color: var(--accent);
-    font-size: 13px;
-    padding: 6px 14px;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-
   /* MARCH / MIST result sections */
   .result-section {
     margin-top: 12px;
@@ -311,12 +299,7 @@
   <div class="main-area">
     <!-- Idle Screen -->
     <div class="screen active" id="screenIdle">
-      <button class="record-btn" id="btnRecord">
-        <span class="mic">&#x1F399;</span>
-        <span>按住錄音</span>
-      </button>
-      <button class="hint-toggle" id="btnHintToggle" onclick="toggleHint()">口述提示 MIST</button>
-      <div class="report-hint" id="reportHint" style="display:none;">
+      <div class="report-hint">
         <div class="hint-title">MIST 口述回報格式</div>
         <div class="hint-section">
           <span class="hint-label">M 受傷機轉：</span>
@@ -342,18 +325,22 @@
           <span class="hint-detail" style="font-size:12px;">特殊族群請提及：兒童/孕婦/慢性病/高齡/外國人</span>
         </div>
       </div>
+      <button class="record-btn" id="btnRecord">
+        <span class="mic">&#x1F399;</span>
+        <span>開始錄音</span>
+      </button>
     </div>
 
     <!-- Recording Screen -->
     <div class="screen" id="screenRecording">
-      <button class="record-btn recording" id="btnRecording">
-        <span class="mic">&#x1F399;</span>
-        <span>放開停止</span>
-      </button>
       <div class="recording-info">
         <span class="recording-dot"></span>錄音中... <span id="recordTime">0</span> 秒
       </div>
       <div class="recording-info">最長 2 分鐘自動停止</div>
+      <button class="record-btn recording" id="btnRecording">
+        <span class="mic">&#x1F399;</span>
+        <span>停止錄音</span>
+      </button>
     </div>
 
     <!-- Processing Screen -->
@@ -364,17 +351,7 @@
 
     <!-- Result Screen -->
     <div class="screen" id="screenResult">
-      <div class="result-card" id="resultCard">
-        <div class="result-level" id="resultLevel"></div>
-        <div class="result-meta" id="resultMeta"></div>
-        <div class="result-summary" id="resultSummary"></div>
-        <ul class="result-actions" id="resultActions"></ul>
-        <div class="result-section" id="sectionMIST"></div>
-        <div class="result-section" id="sectionMARCH"></div>
-        <div class="result-section" id="sectionVitals"></div>
-        <div class="result-section" id="sectionTags"></div>
-        <div class="result-transcript" id="resultTranscript"></div>
-      </div>
+      <div id="resultCard"></div>
       <div class="btn-row" id="resultButtons"></div>
     </div>
 
@@ -415,7 +392,8 @@ let audioChunks = [];
 let recordTimer = null;
 let recordSeconds = 0;
 let caseCount = 0;
-let currentResult = null;
+let currentResult = null;    // single casualty (backward compat)
+let currentCasualties = [];  // all casualties from current recording
 
 // ── Triage display mapping ──
 const LEVEL_MAP = {
@@ -437,6 +415,8 @@ function showScreen(id) {
 
 function resetToIdle() {
   currentResult = null;
+  currentCasualties = [];
+  document.getElementById('resultCard').innerHTML = '';
   showScreen('screenIdle');
 }
 
@@ -486,15 +466,9 @@ function handleRecordingDone() {
   uploadAudio(blob);
 }
 
-// Touch / pointer events for push-to-talk
-function addPTTEvents(btn, start, stop) {
-  btn.addEventListener('pointerdown', e => { e.preventDefault(); start(); });
-  btn.addEventListener('pointerup', e => { e.preventDefault(); stop(); });
-  btn.addEventListener('pointerleave', e => { e.preventDefault(); stop(); });
-  btn.addEventListener('contextmenu', e => e.preventDefault());
-}
-addPTTEvents(btnRecord, startRecording, () => {});
-addPTTEvents(btnRecording, () => {}, stopRecording);
+// Click-to-toggle recording
+btnRecord.addEventListener('click', e => { e.preventDefault(); startRecording(); });
+btnRecording.addEventListener('click', e => { e.preventDefault(); stopRecording(); });
 
 // ── API call ──
 async function uploadAudio(blob) {
@@ -512,8 +486,10 @@ async function uploadAudio(blob) {
       return;
     }
     const data = await resp.json();
-    currentResult = data;
-    showResult(data);
+    // New format: {casualties: [...]}
+    currentCasualties = data.casualties || [data];
+    currentResult = currentCasualties[0];
+    showResult(currentCasualties);
   } catch (e) {
     showError('網路連線失敗：' + e.message);
   }
@@ -542,42 +518,34 @@ function formatAirway(airway) {
   return parts.length ? parts.join(' — ') : null;
 }
 
-// ── Show result ──
-function showResult(data) {
+// ── Show result (supports multiple casualties) ──
+function renderSingleResult(data) {
   const info = LEVEL_MAP[data.triage_level] || LEVEL_MAP.unknown;
-  const card = document.getElementById('resultCard');
-  card.className = 'result-card ' + info.color;
-
-  document.getElementById('resultLevel').textContent = `${info.emoji} ${info.label}`;
+  let html = `<div class="result-card ${info.color}">`;
+  html += `<div class="result-level">${info.emoji} ${info.label}</div>`;
 
   const ts = new Date(data.timestamp);
   const timeStr = `${ts.getFullYear()}/${String(ts.getMonth()+1).padStart(2,'0')}/${String(ts.getDate()).padStart(2,'0')} ${String(ts.getHours()).padStart(2,'0')}:${String(ts.getMinutes()).padStart(2,'0')}`;
-  document.getElementById('resultMeta').textContent = `#${data.case_id}  ${timeStr}`;
+  html += `<div class="result-meta">#${data.case_id}  ${timeStr}</div>`;
+  html += `<div class="result-summary">${data.summary}</div>`;
 
-  document.getElementById('resultSummary').textContent = data.summary;
+  if (data.actions && data.actions.length) {
+    html += '<ul class="result-actions">';
+    data.actions.forEach(a => { html += `<li>${a}</li>`; });
+    html += '</ul>';
+  }
 
-  const actList = document.getElementById('resultActions');
-  actList.innerHTML = '';
-  (data.actions || []).forEach(a => {
-    const li = document.createElement('li');
-    li.textContent = a;
-    actList.appendChild(li);
-  });
-
-  // MIST section
-  const mistEl = document.getElementById('sectionMIST');
+  // MIST
   if (data.mist) {
     const m = data.mist;
-    mistEl.innerHTML = `<div class="result-section-title">MIST 回報</div>` +
+    html += '<div class="result-section"><div class="result-section-title">MIST 回報</div>' +
       renderField('M 機轉', m.m_mechanism) +
       renderField('I 傷勢', m.i_injuries) +
       renderField('S 徵象', m.s_signs) +
-      renderField('T 處置', m.t_treatment);
-    mistEl.style.display = '';
-  } else { mistEl.style.display = 'none'; }
+      renderField('T 處置', m.t_treatment) + '</div>';
+  }
 
-  // MARCH section
-  const marchEl = document.getElementById('sectionMARCH');
+  // MARCH
   if (data.march) {
     const mc = data.march;
     const fields = [
@@ -588,62 +556,78 @@ function showResult(data) {
       ['H 低體溫', mc.h_hypothermia],
     ].filter(f => f[1]);
     if (fields.length) {
-      marchEl.innerHTML = `<div class="result-section-title">MARCH 評估</div>` +
-        fields.map(f => renderField(f[0], f[1])).join('');
-      marchEl.style.display = '';
-    } else { marchEl.style.display = 'none'; }
-  } else { marchEl.style.display = 'none'; }
+      html += '<div class="result-section"><div class="result-section-title">MARCH 評估</div>' +
+        fields.map(f => renderField(f[0], f[1])).join('') + '</div>';
+    }
+  }
 
-  // Vitals section
-  const vitalsEl = document.getElementById('sectionVitals');
-  if (data.vitals) {
-    const v = data.vitals;
-    const vFields = [
-      ['意識', v.consciousness],
-      ['GCS', v.gcs],
-      ['HR', v.hr],
-      ['BP', v.bp],
-      ['SpO2', v.spo2],
-      ['Temp', v.temp],
-      ['RR', v.rr],
-    ].filter(f => f[1] != null);
-    if (vFields.length) {
-      vitalsEl.innerHTML = `<div class="result-section-title">生命徵象</div>` +
-        vFields.map(f => renderField(f[0], f[1])).join('');
-      vitalsEl.style.display = '';
-    } else { vitalsEl.style.display = 'none'; }
-  } else { vitalsEl.style.display = 'none'; }
+  // Vitals
+  const vitalsEl = renderVitalsHtml(data);
+  if (vitalsEl) html += vitalsEl;
 
-  // Tags section (trauma codes, mechanism, special population)
-  const tagsEl = document.getElementById('sectionTags');
-  let tagHtml = '';
+  // Tags
+  const tagsHtml = renderTagsHtml(data);
+  if (tagsHtml) html += tagsHtml;
+
+  html += `<div class="result-transcript">語音原文：${data.transcript}</div>`;
+  html += '</div>';
+  return html;
+}
+
+function renderVitalsHtml(data) {
+  if (!data.vitals) return '';
+  const v = data.vitals;
+  const vFields = [
+    ['意識', v.consciousness],
+    ['GCS', v.gcs],
+    ['HR', v.hr],
+    ['BP', v.bp],
+    ['SpO2', v.spo2],
+    ['Temp', v.temp],
+    ['RR', v.rr],
+  ].filter(f => f[1] != null);
+  if (!vFields.length) return '';
+  return '<div class="result-section"><div class="result-section-title">生命徵象</div>' +
+    vFields.map(f => renderField(f[0], f[1])).join('') + '</div>';
+}
+
+function renderTagsHtml(data) {
   const tc = data.trauma_codes || [];
   const mc2 = data.mechanism_codes || [];
   const sp = data.special_population || [];
-  if (tc.length || mc2.length || sp.length) {
-    tagHtml = '<div class="result-section-title">分類標記</div><div class="result-tags">';
-    tc.forEach(c => { tagHtml += `<span class="result-tag">${c} ${TRAUMA_MAP[c]||c}</span>`; });
-    mc2.forEach(c => { tagHtml += `<span class="result-tag">${c} ${MECH_MAP[c]||c}</span>`; });
-    sp.forEach(s => { tagHtml += `<span class="result-tag">${s}</span>`; });
-    tagHtml += '</div>';
-    tagsEl.innerHTML = tagHtml;
-    tagsEl.style.display = '';
-  } else { tagsEl.style.display = 'none'; }
+  if (!tc.length && !mc2.length && !sp.length) return '';
+  let html = '<div class="result-section"><div class="result-section-title">分類標記</div><div class="result-tags">';
+  tc.forEach(c => { html += `<span class="result-tag">${c} ${TRAUMA_MAP[c]||c}</span>`; });
+  mc2.forEach(c => { html += `<span class="result-tag">${c} ${MECH_MAP[c]||c}</span>`; });
+  sp.forEach(s => { html += `<span class="result-tag">${s}</span>`; });
+  html += '</div></div>';
+  return html;
+}
 
-  document.getElementById('resultTranscript').textContent = `語音原文：${data.transcript}`;
+function showResult(casualties) {
+  const container = document.getElementById('resultCard');
+  let html = '';
+  casualties.forEach((c, i) => {
+    html += renderSingleResult(c);
+    if (i < casualties.length - 1) {
+      html += '<hr style="border:none; border-top:3px dashed var(--text-muted); margin:16px 0;">';
+    }
+  });
+  container.innerHTML = html;
 
   // Buttons
   const btnRow = document.getElementById('resultButtons');
   btnRow.innerHTML = '';
-  if (data.triage_level !== 'unknown') {
+  const hasPrintable = casualties.some(c => c.triage_level !== 'unknown');
+  if (hasPrintable) {
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'btn btn-primary';
     if (bleConnected()) {
-      confirmBtn.textContent = '確認列印';
-      confirmBtn.onclick = () => confirmAndPrint(data);
+      confirmBtn.textContent = casualties.length > 1 ? `確認列印 (${casualties.length} 人)` : '確認列印';
+      confirmBtn.onclick = () => confirmAndPrintAll(casualties);
     } else {
       confirmBtn.textContent = '確認';
-      confirmBtn.onclick = () => showScreen('screenDone');
+      confirmBtn.onclick = () => { logCasualties(casualties); showScreen('screenDone'); };
     }
     btnRow.appendChild(confirmBtn);
   }
@@ -653,22 +637,9 @@ function showResult(data) {
   retryBtn.onclick = resetToIdle;
   btnRow.appendChild(retryBtn);
 
-  caseCount++;
+  caseCount += casualties.length;
   document.getElementById('caseCount').textContent = caseCount;
   showScreen('screenResult');
-}
-
-// ── Hint toggle ──
-function toggleHint() {
-  const hint = document.getElementById('reportHint');
-  const btn = document.getElementById('btnHintToggle');
-  if (hint.style.display === 'none') {
-    hint.style.display = 'block';
-    btn.textContent = '收起提示';
-  } else {
-    hint.style.display = 'none';
-    btn.textContent = '口述提示 MIST';
-  }
 }
 
 function showError(msg) {
@@ -846,6 +817,7 @@ function renderTriageLabel(data) {
   const HEADER_H = 72;
   const META_H = 36;
   const GAP = 10;
+  const DASH_H = 10;
   const SUMMARY_FONT = 32;
   const SUMMARY_LH = 40;
   const ACTION_FONT = 26;
@@ -867,25 +839,25 @@ function renderTriageLabel(data) {
   const actionLines = actions.map(a => '- ' + a);
 
   // MIST
-  const mistLines = [];
+  const mistItems = [];
   if (data.mist) {
     const m = data.mist;
-    if (m.m_mechanism) mistLines.push('M機轉: ' + m.m_mechanism);
-    if (m.i_injuries)  mistLines.push('I傷勢: ' + m.i_injuries);
-    if (m.s_signs)     mistLines.push('S徵象: ' + m.s_signs);
-    if (m.t_treatment) mistLines.push('T處置: ' + m.t_treatment);
+    if (m.m_mechanism) mistItems.push({label: 'M 機轉:', value: m.m_mechanism});
+    if (m.i_injuries)  mistItems.push({label: 'I 傷勢:', value: m.i_injuries});
+    if (m.s_signs)     mistItems.push({label: 'S 徵象:', value: m.s_signs});
+    if (m.t_treatment) mistItems.push({label: 'T 處置:', value: m.t_treatment});
   }
 
   // MARCH
-  const marchLines = [];
+  const marchItems = [];
   if (data.march) {
     const mc = data.march;
-    if (mc.m_hemorrhage)  marchLines.push('M大出血: ' + mc.m_hemorrhage);
+    if (mc.m_hemorrhage)  marchItems.push({label: 'M 大出血:', value: mc.m_hemorrhage});
     const aw = formatAirway(mc.a_airway);
-    if (aw) marchLines.push('A呼吸道: ' + aw);
-    if (mc.r_respiration) marchLines.push('R呼吸: ' + mc.r_respiration);
-    if (mc.c_circulation) marchLines.push('C循環: ' + mc.c_circulation);
-    if (mc.h_hypothermia) marchLines.push('H低體溫: ' + mc.h_hypothermia);
+    if (aw) marchItems.push({label: 'A 呼吸道:', value: aw});
+    if (mc.r_respiration) marchItems.push({label: 'R 呼吸:', value: mc.r_respiration});
+    if (mc.c_circulation) marchItems.push({label: 'C 循環:', value: mc.c_circulation});
+    if (mc.h_hypothermia) marchItems.push({label: 'H 低體溫:', value: mc.h_hypothermia});
   }
 
   // Vitals
@@ -915,8 +887,8 @@ function renderTriageLabel(data) {
   const actionWrapped = actionLines.flatMap(a => wrapText(ctx, a, W - PADDING * 2));
 
   ctx.font = `${MIST_FONT}px ${font}`;
-  const marchWrapped = marchLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
-  const mistWrapped = mistLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
+  const marchWrapped = marchItems.map(item => wrapText(ctx, item.value, W - PADDING * 2));
+  const mistWrapped = mistItems.map(item => wrapText(ctx, item.value, W - PADDING * 2));
   const vitalsWrapped = vitalsLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
   const tagWrapped = tagLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
 
@@ -925,8 +897,17 @@ function renderTriageLabel(data) {
   totalH += GAP; // separator line before summary
   totalH += summaryLines.length * SUMMARY_LH + GAP;
   if (actionWrapped.length) totalH += actionWrapped.length * ACTION_LH + GAP;
-  if (marchWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + marchWrapped.length * MIST_LH + GAP;
-  if (mistWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + mistWrapped.length * MIST_LH + GAP;
+  function itemsSectionH(items, wrappedValues) {
+    if (!items.length) return 0;
+    let h = GAP + MIST_TITLE_FONT + 8;
+    for (let i = 0; i < items.length; i++) {
+      h += MIST_LH + wrappedValues[i].length * MIST_LH;
+      if (i < items.length - 1) h += DASH_H;
+    }
+    return h + GAP;
+  }
+  totalH += itemsSectionH(marchItems, marchWrapped);
+  totalH += itemsSectionH(mistItems, mistWrapped);
   if (vitalsWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + vitalsWrapped.length * MIST_LH + GAP;
   if (tagWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + tagWrapped.length * MIST_LH + GAP;
   totalH += PADDING + 12; // bottom padding + margin
@@ -1021,10 +1002,12 @@ function renderTriageLabel(data) {
     y += GAP;
   }
 
-  // ── MARCH ──
-  if (marchLines.length) {
+  // Helper: draw a section with bold label + value + dashed separators
+  function drawItemsSection(title, items) {
+    if (!items.length) return;
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2;
+    ctx.setLineDash([]);
     ctx.beginPath();
     ctx.moveTo(PADDING, y);
     ctx.lineTo(W - PADDING, y);
@@ -1032,42 +1015,40 @@ function renderTriageLabel(data) {
     y += GAP;
     ctx.font = `bold ${MIST_TITLE_FONT}px ${font}`;
     ctx.fillStyle = '#000000';
-    ctx.fillText('MARCH', PADDING, y);
+    ctx.fillText(title, PADDING, y);
     y += MIST_TITLE_FONT + 8;
-    ctx.font = `${MIST_FONT}px ${font}`;
-    for (const line of marchLines) {
-      const wrapped = wrapText(ctx, line, W - PADDING * 2);
+    items.forEach((item, i) => {
+      ctx.font = `bold ${MIST_FONT}px ${font}`;
+      ctx.fillStyle = '#000000';
+      ctx.fillText(item.label, PADDING, y);
+      y += MIST_LH;
+      ctx.font = `${MIST_FONT}px ${font}`;
+      const wrapped = wrapText(ctx, item.value, W - PADDING * 2);
       for (const wl of wrapped) {
         ctx.fillText(wl, PADDING, y);
         y += MIST_LH;
       }
-    }
+      if (i < items.length - 1) {
+        y += DASH_H / 2;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(PADDING, y);
+        ctx.lineTo(W - PADDING, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        y += DASH_H / 2;
+      }
+    });
     y += GAP;
   }
 
+  // ── MARCH ──
+  drawItemsSection('MARCH 評估', marchItems);
+
   // ── MIST ──
-  if (mistLines.length) {
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(PADDING, y);
-    ctx.lineTo(W - PADDING, y);
-    ctx.stroke();
-    y += GAP;
-    ctx.font = `bold ${MIST_TITLE_FONT}px ${font}`;
-    ctx.fillStyle = '#000000';
-    ctx.fillText('MIST', PADDING, y);
-    y += MIST_TITLE_FONT + 8;
-    ctx.font = `${MIST_FONT}px ${font}`;
-    for (const line of mistLines) {
-      const wrapped = wrapText(ctx, line, W - PADDING * 2);
-      for (const wl of wrapped) {
-        ctx.fillText(wl, PADDING, y);
-        y += MIST_LH;
-      }
-    }
-    y += GAP;
-  }
+  drawItemsSection('MIST 回報', mistItems);
 
   // ── 生命徵象 ──
   if (vitalsLines.length) {
@@ -1160,7 +1141,75 @@ function wrapText(ctx, text, maxWidth) {
 // ── Print Flow ──
 // ══════════════════════════════════════════════
 
+async function printSingleLabel(data, progress, labelPrefix) {
+  progress.textContent = `${labelPrefix}渲染標籤...`;
+  const bitmap = renderTriageLabel(data);
+  const totalRows = bitmap.length / IMG_WIDTH_BYTES;
+
+  progress.textContent = `${labelPrefix}設定印表機...`;
+  await sendCmd(CMD_SET_INTENSITY, [93]);
+  await sleep(50);
+
+  // Get status (optional, continue on timeout)
+  try {
+    const sp = waitForNotify(CMD_GET_STATUS, 3000);
+    await sendCmd(CMD_GET_STATUS, [0x00]);
+    await sp;
+  } catch (_) {}
+  await sleep(50);
+
+  // Print request
+  progress.textContent = `${labelPrefix}送出列印請求...`;
+  const linesLo = totalRows & 0xFF;
+  const linesHi = (totalRows >> 8) & 0xFF;
+  const ackPromise = waitForNotify(CMD_PRINT_REQUEST, 5000);
+  await sendCmd(CMD_PRINT_REQUEST, [linesLo, linesHi, 0x30, 0x00]);
+  try {
+    const ack = await ackPromise;
+    if (ack[0] !== 0) {
+      throw new Error('印表機拒絕列印');
+    }
+  } catch (_) {}
+
+  // Send image data
+  const CHUNK = IMG_WIDTH_BYTES;
+  let sent = 0;
+  for (let i = 0; i < bitmap.length; i += CHUNK) {
+    const chunk = bitmap.slice(i, i + CHUNK);
+    await dataChar.writeValueWithoutResponse(chunk);
+    sent += chunk.length;
+    const pct = Math.round(sent / bitmap.length * 100);
+    progress.textContent = `${labelPrefix}傳送資料 ${pct}%`;
+    await sleep(15);
+  }
+
+  // Flush
+  await sendCmd(CMD_FLUSH_DATA, [0x00]);
+  progress.textContent = `${labelPrefix}列印中...`;
+
+  // Wait for print complete
+  try {
+    await waitForNotify(CMD_PRINT_COMPLETE, 20000);
+  } catch (_) {}
+}
+
 async function confirmAndPrint(data) {
+  await confirmAndPrintAll([data]);
+}
+
+function logCasualties(casualties) {
+  const printable = casualties.filter(c => c.triage_level !== 'unknown');
+  if (!printable.length) return;
+  fetch(`${API_BASE}/log-casualties`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ casualties: printable }),
+  }).catch(e => console.warn('Google Sheet 同步失敗:', e));
+}
+
+async function confirmAndPrintAll(casualties) {
+  logCasualties(casualties);
+
   if (!bleConnected()) {
     showScreen('screenDone');
     return;
@@ -1168,60 +1217,20 @@ async function confirmAndPrint(data) {
 
   showScreen('screenPrinting');
   const progress = document.getElementById('printProgress');
+  const total = casualties.filter(c => c.triage_level !== 'unknown').length;
 
   try {
-    progress.textContent = '渲染標籤...';
-    const bitmap = renderTriageLabel(data);
-    const totalRows = bitmap.length / IMG_WIDTH_BYTES;
-
-    progress.textContent = '設定印表機...';
-    await sendCmd(CMD_SET_INTENSITY, [93]);
-    await sleep(50);
-
-    // Get status (optional, continue on timeout)
-    try {
-      const sp = waitForNotify(CMD_GET_STATUS, 3000);
-      await sendCmd(CMD_GET_STATUS, [0x00]);
-      await sp;
-    } catch (_) {}
-    await sleep(50);
-
-    // Print request
-    progress.textContent = '送出列印請求...';
-    const linesLo = totalRows & 0xFF;
-    const linesHi = (totalRows >> 8) & 0xFF;
-    const ackPromise = waitForNotify(CMD_PRINT_REQUEST, 5000);
-    await sendCmd(CMD_PRINT_REQUEST, [linesLo, linesHi, 0x30, 0x00]);
-    try {
-      const ack = await ackPromise;
-      if (ack[0] !== 0) {
-        showError('印表機拒絕列印');
-        return;
-      }
-    } catch (_) {}
-
-    // Send image data
-    const CHUNK = IMG_WIDTH_BYTES;
-    let sent = 0;
-    for (let i = 0; i < bitmap.length; i += CHUNK) {
-      const chunk = bitmap.slice(i, i + CHUNK);
-      await dataChar.writeValueWithoutResponse(chunk);
-      sent += chunk.length;
-      const pct = Math.round(sent / bitmap.length * 100);
-      progress.textContent = `傳送資料 ${pct}%`;
-      await sleep(15);
+    let printed = 0;
+    for (const c of casualties) {
+      if (c.triage_level === 'unknown') continue;
+      printed++;
+      const prefix = total > 1 ? `[${printed}/${total}] ` : '';
+      await printSingleLabel(c, progress, prefix);
+      // Small pause between labels
+      if (printed < total) await sleep(500);
     }
 
-    // Flush
-    await sendCmd(CMD_FLUSH_DATA, [0x00]);
-    progress.textContent = '列印中...';
-
-    // Wait for print complete
-    try {
-      await waitForNotify(CMD_PRINT_COMPLETE, 20000);
-    } catch (_) {}
-
-    document.getElementById('doneMsg').textContent = '列印完成';
+    document.getElementById('doneMsg').textContent = total > 1 ? `${total} 張標籤列印完成` : '列印完成';
     showScreen('screenDone');
 
   } catch (e) {

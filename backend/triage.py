@@ -85,6 +85,8 @@ N 燒燙傷、O OHCA、P 斷肢
 11 溺水*、12 電擊傷*（*需逆向檢傷）
 非創傷：疑似食物中毒、吸入性傷害或發紺、疑似心臟原因者、過度換氣
 
+**重要：mechanism_codes 只能填入上方列出的代碼數字。若口述的受傷機轉（如地震、火災、踩踏等）不在上方列表中，mechanism_codes 必須為空陣列 []，並在 MIST 的 m_mechanism 欄位以文字描述實際機轉即可。絕對不可將不符合的機轉強行對應到相近的代碼。**
+
 ## 特殊情況處理
 - 若口述內容模糊、資訊不足以判斷檢傷級別，將 triage_level 設為 "unknown"
 - 若口述內容明顯為非傷患相關的語音（如閒聊、環境噪音轉錄），同樣設為 "unknown"
@@ -96,7 +98,11 @@ N 燒燙傷、O OHCA、P 斷肢
 
 口述內容：{transcript}
 
-請以 JSON 格式回覆，包含以下欄位：
+## 多名傷患處理
+口述中可能包含多名傷患的描述。請依據「下一位」、「第一位/第二位/第三位」等關鍵詞將口述內容拆分為多位傷患，對每位傷患各自獨立進行檢傷分類。
+若口述中只描述一名傷患，則回傳只包含一個元素的陣列。
+
+請以 JSON 格式回覆，回傳一個**陣列**，每個元素代表一名傷患，包含以下欄位：
 - triage_level: "black" | "red" | "yellow" | "green" | "unknown"
 - triage_label: 對應中文（緊急/優先/一般/不治/無法判讀）
 - summary: 傷況摘要（繁體中文，50字內）
@@ -126,17 +132,17 @@ N 燒燙傷、O OHCA、P 斷肢
   - s_signs: 生命徵象
   - t_treatment: 已做處置
 
-只回覆 JSON，不要其他文字。"""
+只回覆 JSON 陣列，不要其他文字。範例格式：[{...傷患1...}, {...傷患2...}]"""
 
 
-def triage(transcript: str) -> dict:
+def triage(transcript: str) -> list[dict]:
     """Call Gemini API to perform START triage on the transcript.
 
     Args:
         transcript: The transcribed speech text.
 
     Returns:
-        Dict with triage_level, triage_label, summary, actions.
+        List of dicts, each with triage_level, triage_label, summary, actions, etc.
 
     Raises:
         RuntimeError: If Gemini API fails or returns invalid JSON.
@@ -165,15 +171,23 @@ def triage(transcript: str) -> dict:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Gemini 回傳非 JSON 格式: {e}")
 
-    # Validate required fields
+    # Backward compat: if Gemini returns a single object, wrap it in a list
+    if isinstance(result, dict):
+        result = [result]
+
+    if not isinstance(result, list) or len(result) == 0:
+        raise RuntimeError("Gemini 回傳格式錯誤：預期為非空陣列")
+
+    # Validate each casualty
     required = ["triage_level", "triage_label", "summary", "actions",
                 "march", "vitals", "mist"]
-    for field in required:
-        if field not in result:
-            raise RuntimeError(f"Gemini 回傳缺少欄位: {field}")
-
     valid_levels = {"black", "red", "yellow", "green", "unknown"}
-    if result["triage_level"] not in valid_levels:
-        raise RuntimeError(f"無效的 triage_level: {result['triage_level']}")
+
+    for i, item in enumerate(result):
+        for field in required:
+            if field not in item:
+                raise RuntimeError(f"傷患 {i+1} 缺少欄位: {field}")
+        if item["triage_level"] not in valid_levels:
+            raise RuntimeError(f"傷患 {i+1} 無效的 triage_level: {item['triage_level']}")
 
     return result
