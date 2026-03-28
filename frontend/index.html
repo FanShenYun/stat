@@ -858,6 +858,17 @@ function renderTriageLabel(data) {
     if (m.t_treatment) mistLines.push('T處置: ' + m.t_treatment);
   }
 
+  // MARCH
+  const marchLines = [];
+  if (data.march) {
+    const mc = data.march;
+    if (mc.m_hemorrhage)  marchLines.push('M大出血: ' + mc.m_hemorrhage);
+    if (mc.a_airway)      marchLines.push('A呼吸道: ' + mc.a_airway);
+    if (mc.r_respiration) marchLines.push('R呼吸: ' + mc.r_respiration);
+    if (mc.c_circulation) marchLines.push('C循環: ' + mc.c_circulation);
+    if (mc.h_hypothermia) marchLines.push('H低體溫: ' + mc.h_hypothermia);
+  }
+
   // Wrap actions for height calc
   ctx.font = `${ACTION_FONT}px ${font}`;
   const actionWrapped = actionLines.flatMap(a => wrapText(ctx, a, W - PADDING * 2));
@@ -866,10 +877,14 @@ function renderTriageLabel(data) {
   ctx.font = `${MIST_FONT}px ${font}`;
   const mistWrapped = mistLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
 
+  // Wrap MARCH for height calc
+  const marchWrapped = marchLines.flatMap(l => wrapText(ctx, l, W - PADDING * 2));
+
   // Calculate total height
   let totalH = PADDING + HEADER_H + GAP + META_H + GAP;
   totalH += summaryLines.length * SUMMARY_LH + GAP;
   if (actionWrapped.length) totalH += actionWrapped.length * ACTION_LH + GAP;
+  if (marchWrapped.length) totalH += MIST_TITLE_FONT + 8 + marchWrapped.length * MIST_LH + GAP;
   if (mistWrapped.length) totalH += MIST_TITLE_FONT + 8 + mistWrapped.length * MIST_LH + GAP;
   totalH += PADDING + 12; // bottom padding + margin
 
@@ -963,6 +978,30 @@ function renderTriageLabel(data) {
     y += GAP;
   }
 
+  // ── MARCH ──
+  if (marchLines.length) {
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(PADDING, y);
+    ctx.lineTo(W - PADDING, y);
+    ctx.stroke();
+    y += GAP;
+    ctx.font = `bold ${MIST_TITLE_FONT}px ${font}`;
+    ctx.fillStyle = '#000000';
+    ctx.fillText('MARCH', PADDING, y);
+    y += MIST_TITLE_FONT + 8;
+    ctx.font = `${MIST_FONT}px ${font}`;
+    for (const line of marchLines) {
+      const wrapped = wrapText(ctx, line, W - PADDING * 2);
+      for (const wl of wrapped) {
+        ctx.fillText(wl, PADDING, y);
+        y += MIST_LH;
+      }
+    }
+    y += GAP;
+  }
+
   // ── MIST ──
   if (mistLines.length) {
     ctx.strokeStyle = '#000000';
@@ -973,6 +1012,7 @@ function renderTriageLabel(data) {
     ctx.stroke();
     y += GAP;
     ctx.font = `bold ${MIST_TITLE_FONT}px ${font}`;
+    ctx.fillStyle = '#000000';
     ctx.fillText('MIST', PADDING, y);
     y += MIST_TITLE_FONT + 8;
     ctx.font = `${MIST_FONT}px ${font}`;
