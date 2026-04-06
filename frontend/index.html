@@ -889,13 +889,19 @@ function buildMistText(mist) {
   return parts.join('\n');
 }
 
+// qrcode-generator 預設把字串當 ISO-8859-1，中文會亂碼。
+// 先轉 UTF-8 bytes 再以 Latin-1 字串形式餵入，掃描端以 UTF-8 解析才會正確。
+function toUtf8Bytes(str) {
+  return unescape(encodeURIComponent(str));
+}
+
 // 用 qrcode-generator 產生 data URL；失敗回傳空字串
 function makeMistQrDataUrl(text, cellSize = 4, margin = 2) {
   if (!text || typeof qrcode === 'undefined') return '';
   try {
     // typeNumber=0 讓函式庫依內容自動選最小版本；錯誤修正 M 級
     const qr = qrcode(0, 'M');
-    qr.addData(text);
+    qr.addData(toUtf8Bytes(text), 'Byte');
     qr.make();
     return qr.createDataURL(cellSize, margin);
   } catch (e) {
@@ -1470,7 +1476,7 @@ function renderTriageLabel(data) {
   if (mistText && typeof qrcode !== 'undefined') {
     try {
       mistQrObj = qrcode(0, 'M');
-      mistQrObj.addData(mistText);
+      mistQrObj.addData(toUtf8Bytes(mistText), 'Byte');
       mistQrObj.make();
       const modules = mistQrObj.getModuleCount();
       mistQrCell = Math.max(1, Math.floor(MIST_QR_TARGET / modules));
