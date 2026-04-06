@@ -272,6 +272,94 @@
     text-align: center;
   }
 
+  /* ── Casualty List ── */
+  .casualty-section {
+    width: 100%;
+    margin-top: 4px;
+  }
+  .casualty-section-title {
+    font-size: 13px;
+    color: var(--text-muted);
+    padding: 6px 2px;
+    border-top: 1px solid #ffffff10;
+    margin-bottom: 8px;
+  }
+  .casualty-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .casualty-item {
+    background: var(--surface);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .casualty-row1 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .triage-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .triage-dot.red     { background: var(--red); }
+  .triage-dot.yellow  { background: var(--yellow); }
+  .triage-dot.green   { background: var(--green); }
+  .triage-dot.black   { background: #555; }
+  .triage-dot.unknown { background: var(--gray); }
+
+  .casualty-caseid {
+    font-size: 15px;
+    font-weight: bold;
+    flex-shrink: 0;
+  }
+  .casualty-summary {
+    font-size: 13px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+  }
+  .status-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .status-badge.processing { background: #3498db33; color: var(--accent); }
+  .status-badge.done       { background: #f1c40f22; color: var(--yellow); }
+  .status-badge.printing   { background: #f39c1222; color: #f39c12; }
+  .status-badge.printed    { background: #2ecc7122; color: var(--green); }
+  .status-badge.error      { background: #e74c3c22; color: var(--red); }
+
+  .casualty-actions {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .btn-sm {
+    padding: 5px 12px;
+    border: none;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn-sm-primary   { background: var(--accent); color: #fff; }
+  .btn-sm-secondary { background: #ffffff15; color: var(--text); }
+  .btn-sm-danger    { background: #e74c3c22; color: var(--red); border: 1px solid #e74c3c44; }
+  .btn-sm-disabled  { background: #ffffff08; color: var(--text-muted); cursor: default; }
+
   footer {
     text-align: center;
     padding: 10px;
@@ -329,6 +417,12 @@
         <span class="mic">&#x1F399;</span>
         <span>開始錄音</span>
       </button>
+
+      <!-- 傷患列表 -->
+      <div class="casualty-section" id="casualtySection" style="display:none;">
+        <div class="casualty-section-title">傷患列表</div>
+        <div class="casualty-list" id="casualtyList"></div>
+      </div>
     </div>
 
     <!-- Recording Screen -->
@@ -343,7 +437,21 @@
       </button>
     </div>
 
-    <!-- Processing Screen -->
+    <!-- Post-Record Screen -->
+    <div class="screen" id="screenPostRecord">
+      <div style="font-size:36px;">&#x1F399;</div>
+      <div style="font-size:18px; font-weight:bold; margin-top:4px;">錄音結束</div>
+      <div style="display:flex; align-items:center; gap:10px; color:var(--text-muted); font-size:14px; margin-top:4px;">
+        <div class="spinner" style="width:22px;height:22px;border-width:2px;flex-shrink:0;"></div>
+        <span>處理中...</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:10px; width:100%; margin-top:16px;">
+        <button class="btn btn-primary" onclick="goHome()">返回首頁</button>
+        <button class="btn btn-secondary" onclick="startRecording()">錄下一位</button>
+      </div>
+    </div>
+
+    <!-- Processing Screen (legacy, kept for reference) -->
     <div class="screen" id="screenProcessing">
       <div class="spinner"></div>
       <div style="font-size:16px; margin-top:8px;">語音辨識與判讀中...</div>
@@ -405,6 +513,7 @@ function _ssRead() {
 function _ssWrite() {
   try { sessionStorage.setItem(SS_CASUALTIES_KEY, JSON.stringify(_casualties)); }
   catch (e) { console.warn('sessionStorage write failed:', e); }
+  window.dispatchEvent(new CustomEvent('stat:changed'));
 }
 
 function _initStore() {
@@ -493,6 +602,13 @@ function resetToIdle() {
   showScreen('screenIdle');
 }
 
+function goHome() {
+  _pendingAudioBase64 = null;
+  _pendingAudioMime = null;
+  _pendingAudioSize = 0;
+  showScreen('screenIdle');
+}
+
 // ── Recording ──
 const btnRecord = document.getElementById('btnRecord');
 const btnRecording = document.getElementById('btnRecording');
@@ -557,20 +673,20 @@ async function handleRecordingDone() {
     _pendingAudioBase64 = null;
   }
 
-  uploadAudio(blob);
+  showScreen('screenPostRecord');
+  uploadAudio(blob);  // 背景執行，不 await
 }
 
 // Click-to-toggle recording
 btnRecord.addEventListener('click', e => { e.preventDefault(); startRecording(); });
 btnRecording.addEventListener('click', e => { e.preventDefault(); stopRecording(); });
 
-// ── API call ──
+// ── API call（背景執行，不操作 UI）──
 async function uploadAudio(blob) {
-  showScreen('screenProcessing');
   const form = new FormData();
   form.append('audio_file', blob, 'recording.webm');
 
-  // 在呼叫前先建立 processing placeholder，供 state store 追蹤
+  // 建立 processing placeholder
   const placeholderCaseId = String(_pendingBatchSeq).padStart(3, '0');
   addCasualty({
     caseId: placeholderCaseId,
@@ -589,18 +705,15 @@ async function uploadAudio(blob) {
       const err = await resp.json().catch(() => ({ detail: { message: '伺服器錯誤' } }));
       const msg = err.detail?.message || err.detail || '伺服器錯誤';
       const transcript = err.detail?.transcript;
-      const fullMsg = msg + (transcript ? `\n原始轉錄：${transcript}` : '');
-      // 更新 state store
       updateCasualty(placeholderCaseId, {
         status: 'error',
-        errorMessage: fullMsg,
+        errorMessage: msg + (transcript ? `\n原始轉錄：${transcript}` : ''),
         errorStage: 'processing',
+        retryable: resp.status >= 500,  // 4xx（如 audio_too_short）不可重試
       });
-      showError(msg + (transcript ? `\n\n原始轉錄：${transcript}` : ''));
       return;
     }
     const data = await resp.json();
-    // New format: {casualties: [...]}
     currentCasualties = data.casualties || [data];
     currentResult = currentCasualties[0];
 
@@ -629,7 +742,7 @@ async function uploadAudio(blob) {
       };
       if (i === 0) {
         if (c.case_id !== placeholderCaseId) {
-          // 多傷患：placeholder 的 caseId 需從 "008" 改為 "008a"
+          // 多傷患：placeholder caseId 從 "008" 改為 "008a"
           const existing = getCasualties().find(x => x.caseId === placeholderCaseId);
           if (existing) {
             removeCasualty(placeholderCaseId);
@@ -648,15 +761,14 @@ async function uploadAudio(blob) {
         });
       }
     });
-
-    showResult(currentCasualties);
+    // 結果集中在首頁列表顯示（step 4），這裡不跳轉畫面
   } catch (e) {
     updateCasualty(placeholderCaseId, {
       status: 'error',
       errorMessage: '網路連線失敗：' + e.message,
       errorStage: 'processing',
+      retryable: true,
     });
-    showError('網路連線失敗：' + e.message);
   }
 }
 
@@ -811,6 +923,120 @@ function showError(msg) {
   document.getElementById('errorMsg').textContent = msg;
   showScreen('screenError');
 }
+
+// ══════════════════════════════════════════════
+// ── Casualty List UI ──
+// ══════════════════════════════════════════════
+
+const STATUS_LABEL = {
+  processing: '處理中',
+  done:       '待列印',
+  printing:   '列印中',
+  printed:    '已列印',
+  error:      '錯誤',
+};
+
+let _prevCasualtyCount = 0;
+
+function renderCasualtyList() {
+  const list    = document.getElementById('casualtyList');
+  const section = document.getElementById('casualtySection');
+  if (!list || !section) return;
+
+  const casualties = getCasualties()
+    .slice()
+    .sort((a, b) => a.batchSeq - b.batchSeq || a.batchIndex - b.batchIndex);
+
+  // 更新「已處理」計數
+  const processedCount = casualties.filter(c => ['done', 'printing', 'printed'].includes(c.status)).length;
+  document.getElementById('caseCount').textContent = processedCount;
+
+  section.style.display = casualties.length ? '' : 'none';
+  list.innerHTML = casualties.map(renderCasualtyItem).join('');
+
+  // 新增筆數時自動捲到最底
+  if (casualties.length > _prevCasualtyCount) {
+    setTimeout(() => {
+      list.lastElementChild?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 60);
+  }
+  _prevCasualtyCount = casualties.length;
+}
+
+function renderCasualtyItem(c) {
+  const level    = c.triageLevel || 'unknown';
+  const summary  = c.summary || c.errorMessage?.split('\n')[0] || '—';
+  const statusLbl = STATUS_LABEL[c.status] || c.status;
+
+  return `
+<div class="casualty-item">
+  <div class="casualty-row1">
+    <span class="triage-dot ${level}"></span>
+    <span class="casualty-caseid">#${c.caseId}</span>
+    <span class="casualty-summary">${escHtml(summary)}</span>
+    <span class="status-badge ${c.status}">${statusLbl}</span>
+  </div>
+  <div class="casualty-actions">
+    ${renderCasualtyActions(c)}
+  </div>
+</div>`;
+}
+
+function renderCasualtyActions(c) {
+  const id = c.caseId;
+  if (c.status === 'processing') {
+    return `<button class="btn-sm btn-sm-secondary" onclick="cancelProcessing('${id}')">取消</button>`;
+  }
+  if (c.status === 'done') {
+    return `
+      <button class="btn-sm btn-sm-secondary" onclick="viewResult('${id}')">察看</button>
+      <button class="btn-sm btn-sm-primary"   onclick="enqueuePrint('${id}')">列印</button>
+      <button class="btn-sm btn-sm-danger"    onclick="deleteCasualty('${id}')">刪除</button>`;
+  }
+  if (c.status === 'printing') {
+    return `<button class="btn-sm btn-sm-disabled" disabled>列印中...</button>`;
+  }
+  if (c.status === 'printed') {
+    return `
+      <button class="btn-sm btn-sm-secondary" onclick="viewResult('${id}')">察看</button>
+      <button class="btn-sm btn-sm-secondary" onclick="enqueuePrint('${id}')">再列印</button>
+      <button class="btn-sm btn-sm-danger"    onclick="deleteCasualty('${id}')">刪除</button>`;
+  }
+  if (c.status === 'error') {
+    const retryBtn = c.retryable
+      ? `<button class="btn-sm btn-sm-secondary" onclick="retryProcessing('${id}')">重試</button>`
+      : `<button class="btn-sm btn-sm-disabled" disabled>重試</button>`;
+    return `
+      <button class="btn-sm btn-sm-secondary" onclick="viewResult('${id}')">察看</button>
+      ${retryBtn}
+      <button class="btn-sm btn-sm-danger"    onclick="deleteCasualty('${id}')">刪除</button>`;
+  }
+  return '';
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ── Casualty action stubs（後續 step 補實作）──
+function cancelProcessing(caseId)  { /* step 6 */ }
+function viewResult(caseId)        { /* step 7 */ }
+function enqueuePrint(caseId)      { /* step 5 */ }
+function retryProcessing(caseId)   { /* step 6 */ }
+function deleteCasualty(caseId) {
+  // step 8 會加二次確認 dialog；目前直接刪除
+  removeCasualty(caseId);
+}
+
+// 監聽 state 變化，重繪列表
+window.addEventListener('stat:changed', renderCasualtyList);
+
+// 初始繪製
+renderCasualtyList();
 
 // ══════════════════════════════════════════════
 // ── MXW01 BLE Printer Protocol ──
