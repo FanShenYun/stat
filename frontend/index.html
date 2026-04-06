@@ -573,6 +573,9 @@ let _pendingAudioBase64 = null;
 let _pendingAudioMime = null;
 let _pendingAudioSize = 0;
 
+// 各筆 processing 中的 AbortController（key: caseId）
+const _abortControllers = new Map();
+
 // ── Triage display mapping ──
 const LEVEL_MAP = {
   red:     { emoji: '\u{1F534}', label: '緊急 - IMMEDIATE', color: 'red' },
@@ -699,8 +702,13 @@ async function uploadAudio(blob) {
     audioSize: _pendingAudioSize,
   });
 
+  const controller = new AbortController();
+  _abortControllers.set(placeholderCaseId, controller);
+
   try {
-    const resp = await fetch(`${API_BASE}/transcribe-and-triage`, { method: 'POST', body: form });
+    const resp = await fetch(`${API_BASE}/transcribe-and-triage`, {
+      method: 'POST', body: form, signal: controller.signal,
+    });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: { message: '伺服器錯誤' } }));
       const msg = err.detail?.message || err.detail || '伺服器錯誤';
@@ -763,12 +771,24 @@ async function uploadAudio(blob) {
     });
     // 結果集中在首頁列表顯示（step 4），這裡不跳轉畫面
   } catch (e) {
-    updateCasualty(placeholderCaseId, {
-      status: 'error',
-      errorMessage: '網路連線失敗：' + e.message,
-      errorStage: 'processing',
-      retryable: true,
-    });
+    if (e.name === 'AbortError') {
+      updateCasualty(placeholderCaseId, {
+        status: 'error',
+        errorMessage: '已取消',
+        errorStage: 'processing',
+        cancelled: true,
+        retryable: false,
+      });
+    } else {
+      updateCasualty(placeholderCaseId, {
+        status: 'error',
+        errorMessage: '網路連線失敗：' + e.message,
+        errorStage: 'processing',
+        retryable: true,
+      });
+    }
+  } finally {
+    _abortControllers.delete(placeholderCaseId);
   }
 }
 
@@ -1023,10 +1043,44 @@ function escHtml(str) {
 }
 
 // ── Casualty action stubs（後續 step 補實作）──
-function cancelProcessing(caseId)  { /* step 6 */ }
+function cancelProcessing(caseId) {
+  const controller = _abortControllers.get(caseId);
+  if (controller) controller.abort();
+}
 function viewResult(caseId)        { /* step 7 */ }
-function enqueuePrint(caseId)      { /* step 5 */ }
-function retryProcessing(caseId)   { /* step 6 */ }
+function enqueuePrint(caseId)      { /* step 5 — overridden by Print Queue section */ }
+function retryProcessing(caseId) {
+  const c = getCasualties().find(x => x.caseId === caseId);
+  if (!c || !c.retryable) return;
+
+  if (c.errorStage === 'printing') {
+    // 列印失敗重試：改回 done 再重新進佇列
+    updateCasualty(caseId, {
+      status: 'done',
+      errorMessage: undefined,
+      errorStage: undefined,
+      retryable: undefined,
+    });
+    enqueuePrint(caseId);
+    return;
+  }
+
+  // 上傳/AI 失敗重試：base64 → blob → 重送
+  if (!c.audioBase64) return;
+  const binary = atob(c.audioBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const blob = new Blob([bytes], { type: c.audioMime || 'audio/webm' });
+
+  updateCasualty(caseId, {
+    status: 'processing',
+    errorMessage: undefined,
+    errorStage: undefined,
+    retryable: undefined,
+    cancelled: undefined,
+  });
+  _retryUpload(caseId, blob, c.batchSeq);
+}
 function deleteCasualty(caseId) {
   // step 8 會加二次確認 dialog；目前直接刪除
   removeCasualty(caseId);
@@ -1724,6 +1778,103 @@ async function _runPrintWorker() {
   }
 
   _printLock = false;
+}
+
+// ══════════════════════════════════════════════
+// ── Retry Upload ──
+// ══════════════════════════════════════════════
+
+async function _retryUpload(caseId, blob, batchSeq) {
+  const form = new FormData();
+  form.append('audio_file', blob, 'recording.webm');
+
+  const controller = new AbortController();
+  _abortControllers.set(caseId, controller);
+
+  try {
+    const resp = await fetch(`${API_BASE}/transcribe-and-triage`, {
+      method: 'POST', body: form, signal: controller.signal,
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: { message: '伺服器錯誤' } }));
+      const msg = err.detail?.message || err.detail || '伺服器錯誤';
+      const transcript = err.detail?.transcript;
+      updateCasualty(caseId, {
+        status: 'error',
+        errorMessage: msg + (transcript ? `\n原始轉錄：${transcript}` : ''),
+        errorStage: 'processing',
+        retryable: resp.status >= 500,
+      });
+      return;
+    }
+
+    const data = await resp.json();
+    const results = data.casualties || [data];
+
+    // 前端分配 case_id（與 uploadAudio 相同邏輯）
+    const batchPad = String(batchSeq).padStart(3, '0');
+    const isMulti = results.length > 1;
+    results.forEach((c, i) => {
+      c.case_id = batchPad + (isMulti ? String.fromCharCode(97 + i) : '');
+    });
+
+    results.forEach((c, i) => {
+      const entry = {
+        status: 'done',
+        transcript: c.transcript,
+        triageLevel: c.triage_level,
+        triageLabel: c.triage_label,
+        summary: c.summary,
+        actions: c.actions,
+        march: c.march,
+        vitals: c.vitals,
+        traumaCodes: c.trauma_codes,
+        mechanismCodes: c.mechanism_codes,
+        specialPopulation: c.special_population,
+        mist: c.mist,
+      };
+      if (i === 0) {
+        if (c.case_id !== caseId) {
+          // 單→多：把原有筆 rename 成 "001a"
+          const existing = getCasualties().find(x => x.caseId === caseId);
+          if (existing) {
+            removeCasualty(caseId);
+            addCasualty({ ...existing, ...entry, caseId: c.case_id, batchIndex: 0 });
+          }
+        } else {
+          updateCasualty(caseId, entry);
+        }
+      } else {
+        addCasualty({
+          caseId: c.case_id,
+          batchSeq,
+          batchIndex: i,
+          recordedAt: new Date().toISOString(),
+          ...entry,
+        });
+      }
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      updateCasualty(caseId, {
+        status: 'error',
+        errorMessage: '已取消',
+        errorStage: 'processing',
+        cancelled: true,
+        retryable: false,
+      });
+    } else {
+      updateCasualty(caseId, {
+        status: 'error',
+        errorMessage: '網路連線失敗：' + e.message,
+        errorStage: 'processing',
+        retryable: true,
+      });
+    }
+  } finally {
+    _abortControllers.delete(caseId);
+  }
 }
 </script>
 </body>
