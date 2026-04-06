@@ -8,6 +8,7 @@
 - **語音轉文字** - OpenAI Whisper API 即時轉錄
 - **AI 檢傷判讀** - Gemini 2.5 Flash 依據 START 檢傷準則自動分類（紅/黃/綠/黑）
 - **結構化報告** - 顯示 MARCH 評估、MIST 報告、生命徵象、創傷代碼
+- **MIST QR Code** - 察看結果 modal 與列印標籤皆含 QR，掃描可直接取得 MIST 四欄純文字匯入 HIS/EMR
 - **藍牙列印** - 透過 Web Bluetooth 直連 MXW01 熱感印表機列印標籤
 - **佇列式多傷患處理** - 錄音結束後可立刻錄下一位，AI 處理與列印在背景進行
 - **傷患列表** - 首頁集中顯示所有傷患的處理狀態，可逐筆察看、列印、刪除、重試
@@ -126,6 +127,7 @@ stat/
 │   └── requirements.txt
 ├── frontend/
 │   ├── index.html           # 主頁面（錄音/列表/列印）
+│   ├── qrcode.min.js        # qrcode-generator v1.4.4（MIST QR 用，vendored）
 │   └── ble-test.html        # BLE 印表機測試頁
 ├── docs/
 │   ├── develop_spec.md      # 開發規格書 v1
