@@ -272,6 +272,39 @@
     text-align: center;
   }
 
+  /* ── Result Modal ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 100;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    padding: 16px;
+  }
+  .modal-inner {
+    max-width: 420px;
+    margin: 0 auto;
+    padding-bottom: 32px;
+  }
+  .modal-close-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 8px;
+  }
+  .modal-close-btn {
+    background: #ffffff20;
+    border: none;
+    color: var(--text);
+    font-size: 20px;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    cursor: pointer;
+    line-height: 36px;
+    text-align: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+
   /* ── Casualty List ── */
   .casualty-section {
     width: 100%;
@@ -484,6 +517,17 @@
   </div>
 
   <footer>STAT v0.2 POC — 僅供演練展示</footer>
+</div>
+
+<!-- Result Modal (step 7) -->
+<div id="resultModal" class="modal-overlay" style="display:none;" onclick="handleModalOverlayClick(event)">
+  <div class="modal-inner">
+    <div class="modal-close-bar">
+      <button class="modal-close-btn" onclick="closeModal()">&#x2715;</button>
+    </div>
+    <div id="modalContent"></div>
+    <div class="btn-row" style="margin-top:12px;" id="modalButtons"></div>
+  </div>
 </div>
 
 <script>
@@ -1047,7 +1091,44 @@ function cancelProcessing(caseId) {
   const controller = _abortControllers.get(caseId);
   if (controller) controller.abort();
 }
-function viewResult(caseId)        { /* step 7 */ }
+
+// ── Step 7: 察看結果 modal ──
+function viewResult(caseId) {
+  const c = getCasualties().find(x => x.caseId === caseId);
+  if (!c) return;
+
+  const modal   = document.getElementById('resultModal');
+  const content = document.getElementById('modalContent');
+  const buttons = document.getElementById('modalButtons');
+
+  if (['error'].includes(c.status)) {
+    content.innerHTML =
+      `<div class="error-msg" style="text-align:left; white-space:pre-wrap;">${escHtml(c.errorMessage || '未知錯誤')}</div>`;
+    buttons.innerHTML =
+      `<button class="btn btn-secondary" onclick="closeModal()">關閉</button>`;
+  } else {
+    content.innerHTML = renderSingleResult(_casualtyToApiShape(c));
+    const canPrint  = c.status === 'done' || c.status === 'printed';
+    const printLbl  = c.status === 'printed' ? '再列印' : '列印';
+    buttons.innerHTML = `
+      ${canPrint ? `<button class="btn btn-primary" onclick="closeModal();enqueuePrint('${caseId}')">${printLbl}</button>` : ''}
+      <button class="btn btn-secondary" onclick="closeModal()">關閉</button>`;
+  }
+
+  modal.style.display = 'block';
+  document.body.style.overflow = 'hidden';
+}
+
+function closeModal() {
+  document.getElementById('resultModal').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+// 點 overlay 背景關閉 modal
+function handleModalOverlayClick(e) {
+  if (e.target === document.getElementById('resultModal')) closeModal();
+}
+
 function enqueuePrint(caseId)      { /* step 5 — overridden by Print Queue section */ }
 function retryProcessing(caseId) {
   const c = getCasualties().find(x => x.caseId === caseId);
@@ -1081,8 +1162,9 @@ function retryProcessing(caseId) {
   });
   _retryUpload(caseId, blob, c.batchSeq);
 }
+// ── Step 8: 刪除二次確認 ──
 function deleteCasualty(caseId) {
-  // step 8 會加二次確認 dialog；目前直接刪除
+  if (!confirm(`確定要刪除 #${caseId}？\n此操作無法復原。`)) return;
   removeCasualty(caseId);
 }
 
