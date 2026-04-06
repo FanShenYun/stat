@@ -1165,6 +1165,11 @@ async function connectPrinter() {
     bleDevice.addEventListener('gattserverdisconnected', () => {
       ctrlChar = dataChar = notifyChar = null;
       updateBleUI('', '連線印表機');
+      // 清隊列：把還在 printing 的項目改回 done，讓使用者重新連線後手動再列印
+      _printQueue = [];
+      getCasualties()
+        .filter(c => c.status === 'printing')
+        .forEach(c => updateCasualty(c.caseId, { status: 'done' }));
     });
 
     updateBleUI('connecting', '連線中...');
@@ -1627,6 +1632,98 @@ async function confirmAndPrintAll(casualties) {
   } catch (e) {
     showError('列印失敗：' + e.message);
   }
+}
+
+// ══════════════════════════════════════════════
+// ── Print Queue ──
+// ══════════════════════════════════════════════
+
+let _printQueue = [];   // caseId[]
+let _printLock  = false;
+
+// 把 state store 的 camelCase 轉成 printSingleLabel / log-casualties 需要的 snake_case
+function _casualtyToApiShape(c) {
+  return {
+    case_id:           c.caseId,
+    timestamp:         c.recordedAt,
+    triage_level:      c.triageLevel,
+    triage_label:      c.triageLabel,
+    summary:           c.summary,
+    actions:           c.actions,
+    march:             c.march,
+    vitals:            c.vitals,
+    trauma_codes:      c.traumaCodes      || [],
+    mechanism_codes:   c.mechanismCodes   || [],
+    special_population: c.specialPopulation || [],
+    mist:              c.mist,
+    transcript:        c.transcript,
+  };
+}
+
+function _logCasualtyToSheet(c) {
+  if (!c || c.triageLevel === 'unknown') return;
+  fetch(`${API_BASE}/log-casualties`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ casualties: [_casualtyToApiShape(c)] }),
+  }).catch(e => console.warn('Google Sheet 同步失敗:', e));
+}
+
+// enqueuePrint：取代 stub（由列表的「列印」/「再列印」按鈕呼叫）
+function enqueuePrint(caseId) {   // 覆寫前面定義的 stub
+  if (!bleConnected()) {
+    alert('請先連線藍牙印表機');
+    return;
+  }
+  const c = getCasualties().find(x => x.caseId === caseId);
+  if (!c || c.status === 'printing') return;
+
+  updateCasualty(caseId, { status: 'printing' });
+  _printQueue.push(caseId);
+  _runPrintWorker();
+}
+
+async function _runPrintWorker() {
+  if (_printLock) return;
+  _printLock = true;
+
+  while (_printQueue.length > 0) {
+    if (!bleConnected()) {
+      // 斷線：把佇列裡的項目改回 done，由 gattserverdisconnected handler 負責
+      _printLock = false;
+      return;
+    }
+
+    const caseId = _printQueue.shift();
+    const c = getCasualties().find(x => x.caseId === caseId);
+    if (!c) continue;
+
+    const fakeProgress = { set textContent(_) {} };
+    try {
+      await printSingleLabel(_casualtyToApiShape(c), fakeProgress, '');
+
+      const printCount = (c.printCount || 0) + 1;
+      updateCasualty(caseId, {
+        status: 'printed',
+        printedAt: new Date().toISOString(),
+        printCount,
+      });
+      // Google Sheet 只在第一次列印成功後送出
+      if (printCount === 1) {
+        _logCasualtyToSheet(getCasualties().find(x => x.caseId === caseId));
+      }
+    } catch (e) {
+      updateCasualty(caseId, {
+        status: 'error',
+        errorMessage: '列印失敗：' + e.message,
+        errorStage: 'printing',
+        retryable: true,
+      });
+      if (!bleConnected()) break;
+    }
+  }
+
+  _printLock = false;
 }
 </script>
 </body>
