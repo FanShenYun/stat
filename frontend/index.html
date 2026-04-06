@@ -248,6 +248,23 @@
     color: var(--text);
     font-weight: bold;
   }
+  .mist-qr {
+    margin-top: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .mist-qr canvas {
+    background: #fff;
+    padding: 8px;
+    border-radius: 4px;
+    image-rendering: pixelated;
+  }
+  .mist-qr .mist-qr-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
   .result-tags {
     display: flex;
     flex-wrap: wrap;
@@ -530,6 +547,7 @@
   </div>
 </div>
 
+<script src="qrcode.min.js"></script>
 <script>
 // ── Config ──
 // Derive API base from current page path (includes /s/{secret}/)
@@ -859,6 +877,33 @@ function formatAirway(airway) {
   return parts.length ? parts.join(' — ') : null;
 }
 
+// ── MIST QR helpers ──
+// 將 MIST 四欄組成純文字（掃描後可直接貼入 HIS/EMR）
+function buildMistText(mist) {
+  if (!mist) return '';
+  const parts = [];
+  if (mist.m_mechanism) parts.push('M: ' + mist.m_mechanism);
+  if (mist.i_injuries)  parts.push('I: ' + mist.i_injuries);
+  if (mist.s_signs)     parts.push('S: ' + mist.s_signs);
+  if (mist.t_treatment) parts.push('T: ' + mist.t_treatment);
+  return parts.join('\n');
+}
+
+// 用 qrcode-generator 產生 data URL；失敗回傳空字串
+function makeMistQrDataUrl(text, cellSize = 4, margin = 2) {
+  if (!text || typeof qrcode === 'undefined') return '';
+  try {
+    // typeNumber=0 讓函式庫依內容自動選最小版本；錯誤修正 M 級
+    const qr = qrcode(0, 'M');
+    qr.addData(text);
+    qr.make();
+    return qr.createDataURL(cellSize, margin);
+  } catch (e) {
+    console.warn('MIST QR 產生失敗:', e);
+    return '';
+  }
+}
+
 // ── Show result (supports multiple casualties) ──
 function renderSingleResult(data) {
   const info = LEVEL_MAP[data.triage_level] || LEVEL_MAP.unknown;
@@ -883,7 +928,18 @@ function renderSingleResult(data) {
       renderField('M 機轉', m.m_mechanism) +
       renderField('I 傷勢', m.i_injuries) +
       renderField('S 徵象', m.s_signs) +
-      renderField('T 處置', m.t_treatment) + '</div>';
+      renderField('T 處置', m.t_treatment);
+    const mistText = buildMistText(m);
+    if (mistText) {
+      const qrDataUrl = makeMistQrDataUrl(mistText);
+      if (qrDataUrl) {
+        html += '<div class="mist-qr">' +
+          `<img src="${qrDataUrl}" alt="MIST QR" width="160" height="160">` +
+          '<div class="mist-qr-hint">掃描匯入 MIST 文字</div>' +
+          '</div>';
+      }
+    }
+    html += '</div>';
   }
 
   // MARCH
@@ -1405,6 +1461,26 @@ function renderTriageLabel(data) {
     }
   }
 
+  // MIST QR — pre-build so we know height; null if text empty or lib missing
+  const mistText = buildMistText(data.mist);
+  let mistQrObj = null;
+  let mistQrCell = 0;
+  let mistQrActualSize = 0;
+  const MIST_QR_TARGET = 240; // px wide, fits within 384 width with margin
+  if (mistText && typeof qrcode !== 'undefined') {
+    try {
+      mistQrObj = qrcode(0, 'M');
+      mistQrObj.addData(mistText);
+      mistQrObj.make();
+      const modules = mistQrObj.getModuleCount();
+      mistQrCell = Math.max(1, Math.floor(MIST_QR_TARGET / modules));
+      mistQrActualSize = mistQrCell * modules;
+    } catch (e) {
+      console.warn('列印 MIST QR 產生失敗:', e);
+      mistQrObj = null;
+    }
+  }
+
   // Tags (trauma codes, mechanism, special population)
   const tagLines = [];
   const tc = data.trauma_codes || [];
@@ -1440,6 +1516,7 @@ function renderTriageLabel(data) {
   }
   totalH += itemsSectionH(marchItems, marchWrapped);
   totalH += itemsSectionH(mistItems, mistWrapped);
+  if (mistQrObj) totalH += mistQrActualSize + GAP * 2;
   if (vitalsWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + vitalsWrapped.length * MIST_LH + GAP;
   if (tagWrapped.length) totalH += GAP + MIST_TITLE_FONT + 8 + tagWrapped.length * MIST_LH + GAP;
   totalH += PADDING + 12; // bottom padding + margin
@@ -1581,6 +1658,25 @@ function renderTriageLabel(data) {
 
   // ── MIST ──
   drawItemsSection('MIST 回報', mistItems);
+
+  // ── MIST QR（掃描匯入文字） ──
+  if (mistQrObj) {
+    y += GAP;
+    const qrX = Math.floor((W - mistQrActualSize) / 2);
+    const modules = mistQrObj.getModuleCount();
+    // 白底（避免受前一區塊影響）
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(qrX, y, mistQrActualSize, mistQrActualSize);
+    ctx.fillStyle = '#000000';
+    for (let r = 0; r < modules; r++) {
+      for (let c = 0; c < modules; c++) {
+        if (mistQrObj.isDark(r, c)) {
+          ctx.fillRect(qrX + c * mistQrCell, y + r * mistQrCell, mistQrCell, mistQrCell);
+        }
+      }
+    }
+    y += mistQrActualSize + GAP;
+  }
 
   // ── 生命徵象 ──
   if (vitalsLines.length) {

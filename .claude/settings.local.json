@@ -12,7 +12,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:pacochan.net)",
       "Bash(node:*)",
-      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/home/shenyun/stat/backend/main.py'\\).read\\(\\)\\); print\\('Python syntax OK'\\)\")"
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/home/shenyun/stat/backend/main.py'\\).read\\(\\)\\); print\\('Python syntax OK'\\)\")",
+      "Bash(curl -sSL https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js -o /home/shenyun/stat/frontend/qrcode.min.js)"
     ]
   }
 }

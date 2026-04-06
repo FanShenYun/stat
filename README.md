@@ -4,12 +4,39 @@
 
 ## 功能
 
-- **語音輸入** - 按住錄音鍵口述傷患狀況（支援中文）
+- **語音輸入** - 按錄音鍵口述傷患狀況（支援中文，最長 2 分鐘）
 - **語音轉文字** - OpenAI Whisper API 即時轉錄
 - **AI 檢傷判讀** - Gemini 2.5 Flash 依據 START 檢傷準則自動分類（紅/黃/綠/黑）
 - **結構化報告** - 顯示 MARCH 評估、MIST 報告、生命徵象、創傷代碼
 - **藍牙列印** - 透過 Web Bluetooth 直連 MXW01 熱感印表機列印標籤
-- **案件追蹤** - 自動編號（001, 002, ...）
+- **佇列式多傷患處理** - 錄音結束後可立刻錄下一位，AI 處理與列印在背景進行
+- **傷患列表** - 首頁集中顯示所有傷患的處理狀態，可逐筆察看、列印、刪除、重試
+- **列印佇列** - 藍牙印表機 mutex，多筆依序列印不衝突
+
+## 操作流程
+
+```
+[錄音] → [錄音結束]
+              │
+              ├─ 返回首頁  ──▶ 首頁列表（可看到該筆處理中）
+              └─ 錄下一位 ──▶ 立刻開始下一筆錄音
+                                    │
+                         AI 背景處理完成後 ──▶ 狀態自動更新為「待列印」
+                                                      │
+                                              [按列印] → 進列印佇列
+                                                      │
+                                              列印成功 → 狀態「已列印」+ Google Sheet 記錄
+```
+
+### 傷患狀態機
+
+```
+processing ──▶ done ──┬──▶ printing ──▶ printed
+     │                │                    │
+     └──▶ error ◀─────┘       (可重複列印) ◀┘
+           │
+           └──▶ 重試（回到 processing）
+```
 
 ## 系統架構
 
@@ -17,6 +44,7 @@
 Android Chrome
   ├── MediaRecorder (WebM/Opus 錄音)
   ├── Web Bluetooth (MXW01 印表機)
+  ├── sessionStorage (傷患列表、狀態、音訊暫存)
   └── fetch API
         │
         ▼
@@ -50,6 +78,7 @@ cp .env.sample .env
 OPENAI_API_KEY=sk-...
 GEMINI_API_KEY=...
 APP_SECRET_PATH=your_secret_token
+GOOGLE_SHEET_WEBHOOK_URL=https://...  # 選填，Google Apps Script webhook
 ```
 
 產生 secret path：
@@ -96,12 +125,13 @@ stat/
 │   ├── triage.py            # Gemini 檢傷判讀邏輯
 │   └── requirements.txt
 ├── frontend/
-│   ├── index.html           # 主頁面（錄音/顯示/列印）
+│   ├── index.html           # 主頁面（錄音/列表/列印）
 │   └── ble-test.html        # BLE 印表機測試頁
 ├── docs/
-│   ├── TODO.md              # 開發進度
-│   ├── develop_spec.md      # 開發規格書
-│   └── develop_spec_v2.md   # 開發規格書 v2
+│   ├── develop_spec.md      # 開發規格書 v1
+│   ├── develop_spec_v2.md   # 開發規格書 v2
+│   ├── develop_spec_v3_queue.md  # 開發規格書 v3（佇列式流程）
+│   └── v3_test_guide.md     # v3 測試指南
 ├── railway.toml             # Railway 部署設定
 └── .env.sample              # 環境變數範本
 ```
@@ -110,37 +140,69 @@ stat/
 
 ### POST `/s/{secret}/transcribe-and-triage`
 
-上傳錄音檔案，回傳檢傷判讀結果。
+上傳錄音檔案，回傳檢傷判讀結果。Case ID 由**前端**根據錄音順序分配，後端不再產生編號。
 
-**Request:** `multipart/form-data`，欄位 `audio`（WebM 格式）
+**Request:** `multipart/form-data`，欄位 `audio_file`（WebM 格式）
 
 **Response:**
 
 ```json
 {
-  "transcript": "患者無意識，呼吸微弱，大腿開放性骨折",
-  "triage_level": "red",
-  "triage_label": "立即處置",
-  "summary": "大腿開放骨折，呼吸微弱，無意識",
-  "actions": ["立即開放呼吸道", "加壓止血", "優先後送"],
-  "march": {
-    "m_hemorrhage": "大腿開放性骨折，需加壓止血",
-    "a_airway": { "status": "open_at_risk", "description": "無意識，有阻塞風險" },
-    "r_respiration": "呼吸微弱，需監控",
-    "c_circulation": "無橈動脈脈搏，疑似休克",
-    "h_hypothermia": null
-  },
-  "vitals": { "consciousness": "U", "hr": null, "bp": null, "spo2": null },
-  "trauma_codes": ["I", "L"],
-  "mechanism_codes": [5],
-  "special_population": [],
-  "mist": { "mechanism": "...", "injuries": "...", "signs": "...", "treatment": "..." },
-  "timestamp": "2026-03-28T14:32:00+08:00",
-  "case_id": "007"
+  "casualties": [
+    {
+      "transcript": "患者無意識，呼吸微弱，大腿開放性骨折",
+      "triage_level": "red",
+      "triage_label": "立即處置",
+      "summary": "大腿開放骨折，呼吸微弱，無意識",
+      "actions": ["立即開放呼吸道", "加壓止血", "優先後送"],
+      "march": {
+        "m_hemorrhage": "大腿開放性骨折，需加壓止血",
+        "a_airway": { "status": "open_at_risk", "description": "無意識，有阻塞風險" },
+        "r_respiration": "呼吸微弱，需監控",
+        "c_circulation": "無橈動脈脈搏，疑似休克",
+        "h_hypothermia": null
+      },
+      "vitals": { "consciousness": "U", "hr": null, "bp": null, "spo2": null },
+      "trauma_codes": ["I", "L"],
+      "mechanism_codes": [5],
+      "special_population": [],
+      "mist": {
+        "m_mechanism": "...", "i_injuries": "...", "s_signs": "...", "t_treatment": "..."
+      },
+      "timestamp": "2026-03-28T14:32:00+08:00"
+    }
+  ]
 }
 ```
 
-`triage_level` 為 `unknown` 時表示資訊不足，前端不會顯示列印按鈕。
+- `casualties` 陣列長度通常為 1，單次口述描述多位傷患時可能回傳多筆
+- `triage_level` 為 `unknown` 時表示資訊不足
+- 前端收到後依錄音順序分配 case_id：單筆為 `"007"`，多筆為 `"008a"`、`"008b"`
+
+### POST `/s/{secret}/log-casualties`
+
+列印成功後送出傷患紀錄至 Google Sheet。**僅在第一次列印成功後呼叫**，重複列印不重送。
+
+**Request:** `application/json`
+
+```json
+{
+  "casualties": [
+    { "case_id": "007", "triage_level": "red", "summary": "...", ... }
+  ]
+}
+```
+
+## 前端資料儲存
+
+傷患資料以 `sessionStorage` 儲存（關閉分頁自動清除）：
+
+| Key | 說明 |
+|---|---|
+| `stat.casualties` | 所有傷患的 JSON 陣列（含狀態、AI 結果、音訊 base64） |
+| `stat.batchSeq` | 最後分配的錄音序號（單調遞增，用於排序與 case_id 生成） |
+
+重整分頁後，原本 `processing` 狀態的項目會自動轉為 `error`（可用原始音訊重試）。
 
 ## 印表機協議
 
@@ -158,5 +220,6 @@ MXW01 使用私有二進制協議（非 ESC/POS）：
 ## 限制
 
 - Web Bluetooth 僅支援 Android Chrome（iOS 不支援）
-- 案件編號存於記憶體，伺服器重啟後歸零
+- 傷患資料存於 sessionStorage，關閉分頁後清除（單場演練設計）
 - 存取控制僅依靠 secret path，無使用者驗證機制
+- sessionStorage 上限約 5MB；WebM/Opus 錄音 base64 後約 40-70KB/筆，可容納約 80 筆
