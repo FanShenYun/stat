@@ -10,7 +10,9 @@
       "WebFetch(domain:github.com)",
       "WebFetch(domain:werwolv.net)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebFetch(domain:pacochan.net)"
+      "WebFetch(domain:pacochan.net)",
+      "Bash(node:*)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/home/shenyun/stat/backend/main.py'\\).read\\(\\)\\); print\\('Python syntax OK'\\)\")"
     ]
   }
 }

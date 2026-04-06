@@ -35,9 +35,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory case counter (resets on deploy/restart)
-_case_counter = 0
-
 TW_TZ = timezone(timedelta(hours=8))
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -46,8 +43,6 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 @app.post(f"/s/{APP_SECRET_PATH}/transcribe-and-triage")
 async def transcribe_and_triage(audio_file: UploadFile = File(...)):
     """Receive audio, transcribe, run START triage, return result."""
-    global _case_counter
-
     # Read audio bytes
     audio_bytes = await audio_file.read()
 
@@ -79,11 +74,10 @@ async def transcribe_and_triage(audio_file: UploadFile = File(...)):
             "transcript": transcript,
         })
 
-    # Step 3: Build response — assign case_id to each casualty
+    # Step 3: Build response — case_id is now assigned by the frontend
     now = datetime.now(TW_TZ)
     casualties = []
     for result in results:
-        _case_counter += 1
         casualties.append({
             "transcript": transcript,
             "triage_level": result["triage_level"],
@@ -97,7 +91,6 @@ async def transcribe_and_triage(audio_file: UploadFile = File(...)):
             "special_population": result.get("special_population", []),
             "mist": result.get("mist"),
             "timestamp": now.isoformat(),
-            "case_id": f"{_case_counter:03d}",
         })
 
     return JSONResponse(content={"casualties": casualties})

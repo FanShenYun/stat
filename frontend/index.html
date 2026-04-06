@@ -386,6 +386,69 @@ const API_BASE = window.location.origin + pagePath;
 const MAX_RECORD_SEC = 120;
 const MIN_RECORD_SEC = 2;
 
+// ══════════════════════════════════════════════
+// ── State Store ──
+// 集中管理 sessionStorage，提供 in-memory cache 與事件通知
+// ══════════════════════════════════════════════
+const SS_CASUALTIES_KEY = 'stat.casualties';
+const SS_BATCH_SEQ_KEY  = 'stat.batchSeq';
+
+let _casualties = [];
+
+function _ssRead() {
+  try {
+    const raw = sessionStorage.getItem(SS_CASUALTIES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function _ssWrite() {
+  try { sessionStorage.setItem(SS_CASUALTIES_KEY, JSON.stringify(_casualties)); }
+  catch (e) { console.warn('sessionStorage write failed:', e); }
+}
+
+function _initStore() {
+  _casualties = _ssRead();
+  // 頁面重整：把還在 processing 的項目轉為 error
+  let dirty = false;
+  _casualties = _casualties.map(c => {
+    if (c.status === 'processing') {
+      dirty = true;
+      return { ...c, status: 'error', errorMessage: '頁面重整，請重試', errorStage: 'processing' };
+    }
+    return c;
+  });
+  if (dirty) _ssWrite();
+}
+
+function getCasualties() { return _casualties; }
+
+function addCasualty(c) {
+  _casualties.push(c);
+  _ssWrite();
+}
+
+function updateCasualty(caseId, updates) {
+  const idx = _casualties.findIndex(x => x.caseId === caseId);
+  if (idx === -1) return;
+  _casualties[idx] = { ..._casualties[idx], ...updates };
+  _ssWrite();
+}
+
+function removeCasualty(caseId) {
+  _casualties = _casualties.filter(x => x.caseId !== caseId);
+  _ssWrite();
+}
+
+function getNextBatchSeq() {
+  let seq = parseInt(sessionStorage.getItem(SS_BATCH_SEQ_KEY) || '0', 10);
+  seq += 1;
+  sessionStorage.setItem(SS_BATCH_SEQ_KEY, String(seq));
+  return seq;
+}
+
+_initStore();
+
 // ── State ──
 let mediaRecorder = null;
 let audioChunks = [];
@@ -394,6 +457,12 @@ let recordSeconds = 0;
 let caseCount = 0;
 let currentResult = null;    // single casualty (backward compat)
 let currentCasualties = [];  // all casualties from current recording
+
+// 錄音結束後的暫存（用於 state store 寫入與重試）
+let _pendingBatchSeq = 0;
+let _pendingAudioBase64 = null;
+let _pendingAudioMime = null;
+let _pendingAudioSize = 0;
 
 // ── Triage display mapping ──
 const LEVEL_MAP = {
@@ -416,6 +485,10 @@ function showScreen(id) {
 function resetToIdle() {
   currentResult = null;
   currentCasualties = [];
+  _pendingBatchSeq = 0;
+  _pendingAudioBase64 = null;
+  _pendingAudioMime = null;
+  _pendingAudioSize = 0;
   document.getElementById('resultCard').innerHTML = '';
   showScreen('screenIdle');
 }
@@ -457,12 +530,33 @@ function stopRecording() {
   }
 }
 
-function handleRecordingDone() {
+async function handleRecordingDone() {
   if (recordSeconds < MIN_RECORD_SEC) {
     showError('口述時間不足，請錄製至少 2 秒');
     return;
   }
   const blob = new Blob(audioChunks, { type: 'audio/webm' });
+
+  // 分配 batchSeq（錄音結束的那一刻決定順序）
+  _pendingBatchSeq = getNextBatchSeq();
+  _pendingAudioMime = 'audio/webm';
+  _pendingAudioSize = blob.size;
+
+  // 存音訊為 base64，供日後重試用
+  try {
+    const arrayBuf = await blob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuf);
+    let binary = '';
+    const CHUNK = 8192;
+    for (let i = 0; i < bytes.length; i += CHUNK) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    _pendingAudioBase64 = btoa(binary);
+  } catch (e) {
+    console.warn('Audio base64 conversion failed:', e);
+    _pendingAudioBase64 = null;
+  }
+
   uploadAudio(blob);
 }
 
@@ -476,12 +570,32 @@ async function uploadAudio(blob) {
   const form = new FormData();
   form.append('audio_file', blob, 'recording.webm');
 
+  // 在呼叫前先建立 processing placeholder，供 state store 追蹤
+  const placeholderCaseId = String(_pendingBatchSeq).padStart(3, '0');
+  addCasualty({
+    caseId: placeholderCaseId,
+    batchSeq: _pendingBatchSeq,
+    batchIndex: 0,
+    recordedAt: new Date().toISOString(),
+    status: 'processing',
+    audioBase64: _pendingAudioBase64,
+    audioMime: _pendingAudioMime,
+    audioSize: _pendingAudioSize,
+  });
+
   try {
     const resp = await fetch(`${API_BASE}/transcribe-and-triage`, { method: 'POST', body: form });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: { message: '伺服器錯誤' } }));
       const msg = err.detail?.message || err.detail || '伺服器錯誤';
       const transcript = err.detail?.transcript;
+      const fullMsg = msg + (transcript ? `\n原始轉錄：${transcript}` : '');
+      // 更新 state store
+      updateCasualty(placeholderCaseId, {
+        status: 'error',
+        errorMessage: fullMsg,
+        errorStage: 'processing',
+      });
       showError(msg + (transcript ? `\n\n原始轉錄：${transcript}` : ''));
       return;
     }
@@ -489,8 +603,59 @@ async function uploadAudio(blob) {
     // New format: {casualties: [...]}
     currentCasualties = data.casualties || [data];
     currentResult = currentCasualties[0];
+
+    // 前端分配 case_id：單筆 "007"，多筆 "008a"/"008b"/...
+    const batchPad = String(_pendingBatchSeq).padStart(3, '0');
+    const isMulti = currentCasualties.length > 1;
+    currentCasualties.forEach((c, i) => {
+      c.case_id = batchPad + (isMulti ? String.fromCharCode(97 + i) : '');
+    });
+
+    // 更新 state store
+    currentCasualties.forEach((c, i) => {
+      const entry = {
+        status: 'done',
+        transcript: c.transcript,
+        triageLevel: c.triage_level,
+        triageLabel: c.triage_label,
+        summary: c.summary,
+        actions: c.actions,
+        march: c.march,
+        vitals: c.vitals,
+        traumaCodes: c.trauma_codes,
+        mechanismCodes: c.mechanism_codes,
+        specialPopulation: c.special_population,
+        mist: c.mist,
+      };
+      if (i === 0) {
+        if (c.case_id !== placeholderCaseId) {
+          // 多傷患：placeholder 的 caseId 需從 "008" 改為 "008a"
+          const existing = getCasualties().find(x => x.caseId === placeholderCaseId);
+          if (existing) {
+            removeCasualty(placeholderCaseId);
+            addCasualty({ ...existing, ...entry, caseId: c.case_id, batchIndex: 0 });
+          }
+        } else {
+          updateCasualty(placeholderCaseId, entry);
+        }
+      } else {
+        addCasualty({
+          caseId: c.case_id,
+          batchSeq: _pendingBatchSeq,
+          batchIndex: i,
+          recordedAt: new Date().toISOString(),
+          ...entry,
+        });
+      }
+    });
+
     showResult(currentCasualties);
   } catch (e) {
+    updateCasualty(placeholderCaseId, {
+      status: 'error',
+      errorMessage: '網路連線失敗：' + e.message,
+      errorStage: 'processing',
+    });
     showError('網路連線失敗：' + e.message);
   }
 }
