@@ -154,7 +154,7 @@ def triage(transcript: str) -> list[dict]:
     client = genai.Client(api_key=api_key)
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.1-flash-lite-preview",
         contents=TRIAGE_PROMPT.replace("{transcript}", transcript),
     )
 
